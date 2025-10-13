@@ -12,7 +12,7 @@ class FeatureRegression(nn.Module):
         self.b = nn.Parameter(torch.Tensor(input_size))
 
         m = 1 - torch.eye(input_size, input_size)
-        self.register_buffer('m', m)
+        self.register_buffer('m', m.clone())
 
         self.reset_parameters()
 
@@ -36,7 +36,7 @@ class TemporalDecay(nn.Module):
         if self.diag:
             assert (d_in == d_out)
             m = torch.eye(d_in, d_in)
-            self.register_buffer('m', m)
+            self.register_buffer('m', m.clone())
 
         self.reset_parameters()
 

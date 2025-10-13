@@ -72,7 +72,8 @@ class TransformerEncoder(nn.Module):
         imputed_data = mask * x + (1 - mask) * learned_presentation
 
         if is_bsnc:
-            imputed_data.unsqueeze_(-1), learned_presentation.unsqueeze_(-1)
+            imputed_data = imputed_data.unsqueeze(-1)
+            learned_presentation = learned_presentation.unsqueeze(-1)
         return imputed_data, learned_presentation
 
 

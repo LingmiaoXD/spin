@@ -1,6 +1,10 @@
 import copy
 import datetime
 import os
+import sys
+
+# 添加项目根目录到Python路径
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pytorch_lightning as pl
@@ -25,6 +29,7 @@ from spin.baselines import SAITS, TransformerModel, BRITS
 from spin.imputers import SPINImputer, SAITSImputer, BRITSImputer
 from spin.models import SPINModel, SPINHierarchicalModel
 from spin.scheduler import CosineSchedulerWithRestarts
+#from spin.datasets.lane_traffic_dataset import LaneTrafficDataset
 
 
 def get_model_classes(model_str):
@@ -45,7 +50,14 @@ def get_model_classes(model_str):
     return model, filler
 
 
-def get_dataset(dataset_name: str):
+def get_dataset(dataset_name: str, data_path: str = None):
+    # 支持车道级交通数据集
+    # if dataset_name.startswith('lane'):
+    #    if data_path is None:
+    #        # 使用默认的示例数据路径
+    #        data_path = "sample_lane_data.csv"
+    #    return LaneTrafficDataset(data_path=data_path, impute_nans=True)
+    
     if dataset_name.startswith('air'):
         return AirQuality(impute_nans=True, small=dataset_name[3:] == '36')
     # build missing dataset
@@ -83,6 +95,36 @@ def get_scheduler(scheduler_name: str = None, args=None):
         raise ValueError(f"Invalid scheduler name: {scheduler_name}.")
     return scheduler_class, scheduler_kwargs
 
+def check_shared_storage(model):
+    storage_to_names = {}
+    shared_found = False
+
+    # 检查所有 buffer 和 parameter
+    for name, tensor in model.named_parameters():
+        storage_ptr = tensor.untyped_storage().data_ptr()  # 使用 untyped_storage
+        if storage_ptr in storage_to_names:
+            if not shared_found:
+                print(f"💥 SHARED STORAGE DETECTED (Parameter or Buffer)!")
+                shared_found = True
+            print(f"   {storage_to_names[storage_ptr]} 和 {name} 共享同一块内存:")
+            print(f"   Storage ptr: {storage_ptr}, Shape: {tensor.shape}")
+        else:
+            storage_to_names[storage_ptr] = name
+
+    for name, buf in model.named_buffers():
+        storage_ptr = buf.untyped_storage().data_ptr()
+        if storage_ptr in storage_to_names:
+            if not shared_found:
+                print(f"💥 SHARED STORAGE DETECTED (Parameter or Buffer)!")
+                shared_found = True
+            print(f"   {storage_to_names[storage_ptr]} 和 {name} 共享同一块内存:")
+            print(f"   Storage ptr: {storage_ptr}, Shape: {buf.shape}")
+        else:
+            storage_to_names[storage_ptr] = name
+
+    if not shared_found:
+        print("✅ 所有 Parameters 和 Buffers 内存独立，无共享")
+
 
 def parse_args():
     # Argument parser
@@ -92,6 +134,8 @@ def parse_args():
     parser.add_argument('--precision', type=int, default=32)
     parser.add_argument("--model-name", type=str, default='spin')
     parser.add_argument("--dataset-name", type=str, default='air36')
+    parser.add_argument("--data-path", type=str, default=None, 
+                       help="Path to custom dataset file (for lane datasets)")
     parser.add_argument("--config", type=str, default='imputation/spin.yaml')
 
     # Splitting/aggregation params
@@ -109,6 +153,12 @@ def parse_args():
     parser.add_argument('--grad-clip-val', type=float, default=5.)
     parser.add_argument('--loss-fn', type=str, default='l1_loss')
     parser.add_argument('--lr-scheduler', type=str, default=None)
+    
+    # Checkpoint params
+    parser.add_argument('--checkpoint-path', type=str, default=None,
+                       help="Path to checkpoint file. If provided, skip training and load from checkpoint for testing.")
+    parser.add_argument('--skip-train', action='store_true',
+                       help="Skip training and only do testing (requires --checkpoint-path)")
 
     # Connectivity params
     parser.add_argument("--adj-threshold", type=float, default=0.1)
@@ -121,12 +171,21 @@ def parse_args():
     parser = ImputationDataset.add_argparse_args(parser)
 
     args = parser.parse_args()
+    
+    # 保存checkpoint相关参数，防止被yaml覆盖
+    checkpoint_path = args.checkpoint_path
+    skip_train = args.skip_train
+    
     if args.config is not None:
         cfg_path = os.path.join(config.config_dir, args.config)
         with open(cfg_path, 'r') as fp:
             config_args = yaml.load(fp, Loader=yaml.FullLoader)
         for arg in config_args:
             setattr(args, arg, config_args[arg])
+    
+    # 恢复checkpoint相关参数
+    args.checkpoint_path = checkpoint_path
+    args.skip_train = skip_train
 
     return args
 
@@ -138,12 +197,23 @@ def run_experiment(args):
         args.seed = np.random.randint(1e9)
     torch.set_num_threads(1)
     pl.seed_everything(args.seed)
+    
+    # 内存优化设置
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+    
+    # 设置环境变量以避免内存共享问题
+    
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 
     # script flags
     is_spin = args.model_name in ['spin', 'spin_h']
 
     model_cls, imputer_class = get_model_classes(args.model_name)
-    dataset = get_dataset(args.dataset_name)
+    dataset = get_dataset(args.dataset_name, args.data_path)
 
     logger.info(args)
 
@@ -260,33 +330,61 @@ def run_experiment(args):
                                           monitor='val_mae', mode='min')
 
     tb_logger = TensorBoardLogger(logdir, name="model")
-
-    trainer = pl.Trainer(max_epochs=args.epochs,
-                         default_root_dir=logdir,
-                         logger=tb_logger,
-                         precision=args.precision,
-                         accumulate_grad_batches=args.split_batch_in,
-                         gpus=int(torch.cuda.is_available()),
-                         gradient_clip_val=args.grad_clip_val,
-                         limit_train_batches=args.batches_epoch * args.split_batch_in,
-                         callbacks=[early_stop_callback, checkpoint_callback])
-
-    trainer.fit(imputer,
-                train_dataloaders=dm.train_dataloader(),
-                val_dataloaders=dm.val_dataloader(
-                    batch_size=args.batch_inference))
-
+    
+    # 确定checkpoint路径
+    if args.checkpoint_path is not None:
+        # 使用用户指定的checkpoint
+        best_model_path = args.checkpoint_path
+        print(f"使用指定的checkpoint: {best_model_path}")
+    elif args.skip_train:
+        raise ValueError("--skip-train 需要指定 --checkpoint-path 参数")
+    else:
+        best_model_path = None
+    
+    # 只在需要训练时创建trainer并训练
+    if not args.skip_train:
+        print("开始训练...")
+        print("Checking shared storage...here!!!!!!!")
+        
+        trainer = pl.Trainer(max_epochs=args.epochs,
+                             default_root_dir=logdir,
+                             logger=tb_logger,
+                             precision=args.precision,
+                             accumulate_grad_batches=args.split_batch_in,
+                             accelerator='gpu', 
+                             devices=1,
+                             gradient_clip_val=args.grad_clip_val,
+                             limit_train_batches=args.batches_epoch * args.split_batch_in,
+                             callbacks=[early_stop_callback, checkpoint_callback])
+        check_shared_storage(imputer)
+        print("Checking shared storage...done!!!!!!!")
+        trainer.fit(imputer,
+                    train_dataloaders=dm.train_dataloader(),
+                    val_dataloaders=dm.val_dataloader(
+                        batch_size=args.batch_inference))
+        
+        # 训练完成后使用最佳模型
+        best_model_path = checkpoint_callback.best_model_path
+        print(f"训练完成，最佳模型: {best_model_path}")
+    else:
+        print("跳过训练，直接使用checkpoint进行测试...")
+    
     ########################################
     # testing                              #
     ########################################
 
-    imputer.load_model(checkpoint_callback.best_model_path)
-    imputer.freeze()
-    trainer.test(imputer, dataloaders=dm.test_dataloader(
-        batch_size=args.batch_inference))
+    # 创建测试用的trainer
+    test_trainer = pl.Trainer(accelerator='gpu', devices=1, precision=args.precision)
+    
+    # 使用 PyTorch Lightning 的方式加载最佳模型
+    print(f"开始测试，使用模型: {best_model_path}")
+    test_trainer.test(imputer, dataloaders=dm.test_dataloader(
+        batch_size=args.batch_inference),
+        ckpt_path=best_model_path)
 
-    output = trainer.predict(imputer, dataloaders=dm.test_dataloader(
-        batch_size=args.batch_inference))
+    output = test_trainer.predict(imputer, dataloaders=dm.test_dataloader(
+        batch_size=args.batch_inference),
+        ckpt_path=best_model_path)
     output = casting.numpy(output)
     y_hat, y_true, mask = output['y_hat'].squeeze(-1), \
                           output['y'].squeeze(-1), \

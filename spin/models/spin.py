@@ -71,8 +71,8 @@ class SPINModel(nn.Module):
         if target_nodes is None:
             target_nodes = slice(None)
 
-        # Whiten missing values
-        x = x * mask
+        # Whiten missing values - 避免直接修改输入张量
+        x_masked = x * mask.clone()
 
         # POSITIONAL ENCODING #################################################
         # Obtain spatio-temporal positional encoding for every node-step pair #
@@ -82,14 +82,14 @@ class SPINModel(nn.Module):
         # Build (node, timestamp) encoding
         q = self.u_enc(u, node_index=node_index)
         # Condition value on key
-        h = self.h_enc(x) + q
+        h = self.h_enc(x_masked) + q
 
         # ENCODER #############################################################
         # Obtain representations h^i_t for every (i, t) node-step pair by     #
         # only taking into account valid data in representation set.          #
 
-        # Replace H in missing entries with queries Q
-        h = torch.where(mask.bool(), h, q)
+        # Replace H in missing entries with queries Q - 确保不共享内存
+        h = torch.where(mask.bool(), h, q.clone().detach())
         # Normalize features
         h = self.h_norm(h)
 
@@ -101,9 +101,10 @@ class SPINModel(nn.Module):
                 # valid values from masked ones
                 valid = self.valid_emb(token_index=node_index)
                 masked = self.mask_emb(token_index=node_index)
-                h = torch.where(mask.bool(), h + valid, h + masked)
+                h = torch.where(mask.bool(), h + valid, h + masked.clone().detach())
             # Masked Temporal GAT for encoding representation
-            h = h + self.x_skip[l](x) * mask  # skip connection for valid x
+            skip_connection = self.x_skip[l](x_masked) * mask
+            h = h + skip_connection.clone().detach()  # skip connection for valid x
             h = self.encoder[l](h, edge_index, mask=mask)
             # Read from H to get imputations
             target_readout = self.readout[l](h[..., target_nodes, :])

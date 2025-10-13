@@ -110,10 +110,10 @@ class AdditiveAttention(MessagePassing):
         return out
 
     def normalize_weights(self, weights, index, num_nodes, mask=None):
-        # mask weights
+        # mask weights - 避免就地修改
         if mask is not None:
             fill_value = float("-inf") if self.reweight == 'softmax' else 0.
-            weights = weights.masked_fill(torch.logical_not(mask), fill_value)
+            weights = weights.clone().masked_fill(torch.logical_not(mask), fill_value)
         # eventually reweight
         if self.reweight == 'l1':
             expanded_index = broadcast(index, weights, self.node_dim)

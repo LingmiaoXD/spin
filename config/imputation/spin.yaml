@@ -4,7 +4,7 @@
 #dataset_name: [la_point, bay_point, la_bock, bay_bock, air, air36]
 val_len: 0.1
 
-window: 24  # [24, 36]
+window: 12  # [12, 24, 36]
 stride: 1
 
 #### Training params ##########################################################
@@ -17,15 +17,16 @@ lr_scheduler: magic
 lr: 0.0008
 patience: 40
 precision: 16
-batch_size: 8
+batch_size: 4
 split_batch_in: 2
 batches_epoch: 300
+gradient_checkpointing: True
 
 #### Model params #############################################################
 model_name: 'spin'
-hidden_size: 32
-eta: 3
-n_layers: 4
+hidden_size: 16
+eta: 2
+n_layers: 3
 message_layers: 1
 temporal_self_attention: True
 reweight: 'softmax'

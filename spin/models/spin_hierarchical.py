@@ -120,8 +120,9 @@ class SPINHierarchicalModel(nn.Module):
                 # Condition H on two different embeddings to distinguish
                 # valid values from masked ones
                 h = torch.where(mask.bool(), h + self.v2(), h + self.m2())
-            # Skip connection from input x
-            h = h + self.x_skip[l](x) * mask
+            # Skip connection from input x - 避免内存共享
+            skip_connection = self.x_skip[l](x) * mask
+            h = h + skip_connection.clone().detach()
             # Masked Temporal GAT for encoding representation
             h, z = self.encoder[l](h, z, edge_index, mask=mask)
             target_readout = self.readout[l](h[..., target_nodes, :])

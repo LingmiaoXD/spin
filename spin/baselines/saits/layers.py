@@ -14,7 +14,7 @@ class ScaledDotProductAttention(nn.Module):
         self.dropout = nn.Dropout(attn_dropout)
 
     def forward(self, q, k, v, attn_mask=None):
-        attn = torch.matmul(q / self.temperature, k.transpose(2, 3))
+        attn matmul(q / self.temperature, k.transpose(2, 3))
         if attn_mask is not None:
             attn = attn.masked_fill(attn_mask == 1, -1e9)
         attn = self.dropout(F.softmax(attn, dim=-1))
@@ -123,7 +123,7 @@ class PositionalEncoding(nn.Module):
         super(PositionalEncoding, self).__init__()
         # Not a parameter
         pos_table = self._get_sinusoid_encoding_table(n_position, d_hid)
-        self.register_buffer('pos_table', pos_table)
+        self.register_buffer('pos_table', pos_table.clone())
 
     def _get_sinusoid_encoding_table(self, n_position, d_hid):
         """ Sinusoid position encoding table """

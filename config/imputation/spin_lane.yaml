@@ -1,0 +1,70 @@
+##########################        SPIN LANE CONFIG        ##########################
+
+#### Dataset params ###########################################################
+# 车道级交通数据集配置
+dataset_name: lane_traffic
+data_path: sample_lane_data.csv  # 自定义数据路径
+
+# 数据分割参数
+val_len: 0.1
+test_len: 0.2
+
+# 时间窗口参数
+window: 12  # [12, 24, 36] - 对应2分钟、4分钟、6分钟的时间窗口
+stride: 1
+
+#### Training params ##########################################################
+# 数据增强参数
+whiten_prob: [0.2, 0.5, 0.8]  # 随机白化概率
+scale_target: True
+
+# 训练参数
+epochs: 300
+loss_fn: l1_loss
+lr_scheduler: magic
+lr: 0.0008
+patience: 40
+precision: 16
+batch_size: 4
+split_batch_in: 2
+batches_epoch: 300
+gradient_checkpointing: True
+
+# 图连接参数
+adj_threshold: 0.1  # 邻接矩阵阈值
+
+#### Model params #############################################################
+model_name: 'spin'
+hidden_size: 32  # 隐藏层大小，车道数据可能需要更大的容量
+eta: 2           # 掩码层数
+n_layers: 4      # 编码器层数
+message_layers: 1
+temporal_self_attention: True
+reweight: 'softmax'
+
+#### Lane-specific params #####################################################
+# 车道级数据特有参数
+spatial_resolution: 10.0    # 空间分辨率（米）
+temporal_resolution: 10     # 时间分辨率（秒）
+speed_col: 'speed'          # 速度列名
+spacing_col: 'spacing'      # 间距列名
+time_col: 'timestamp'       # 时间列名
+lane_id_col: 'lane_id'      # 车道ID列名
+spatial_id_col: 'spatial_id' # 空间ID列名
+lane_interaction_col: 'lane_interaction' # 车道交互规则列名
+node_connections_col: 'node_connections'  # 节点连接规则列名
+
+# 图连接策略
+connectivity_strategy: 'lane_based'  # 'lane_based', 'distance_based', 'hybrid'
+cross_lane_connection: True          # 是否启用跨车道连接
+max_cross_lane_distance: 50.0       # 跨车道连接最大距离（米）
+
+# 车道交互规则
+interaction_rule_types: ['dashed', 'solid']  # 支持的交互规则类型
+default_interaction: 'solid'                 # 默认交互规则
+interaction_validation: True                 # 是否验证交互规则
+
+# 节点连接规则
+connection_rule_types: ['direct', 'dashed', 'solid']  # 支持的连接规则类型
+default_connection: 'direct'                          # 默认连接规则
+connection_validation: True                           # 是否验证连接规则
