@@ -80,6 +80,10 @@ class SPINImputer(pl.LightningModule):
             }
         return optimizer
 
+    def forward(self, x, u=None, mask=None, edge_index=None, edge_weight=None):
+        """前向传播方法，PyTorch Lightning 的 predict 需要"""
+        return self.model(x, u, mask, edge_index, edge_weight)
+
     def predict_batch(self, batch, preprocess=True, postprocess=True):
         """预测批次数据"""
         # 尝试不同的方式访问batch数据
@@ -266,6 +270,29 @@ class SPINImputer(pl.LightningModule):
         self.log_metrics(self.test_metrics, batch_size=batch.batch_size)
         self.log_loss('test', test_loss, batch_size=batch.batch_size)
         return test_loss
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        """预测步骤，用于 Trainer.predict()"""
+        # 获取设备信息
+        device = next(self.model.parameters()).device
+        
+        # 执行预测
+        y_hat = self.predict_batch(batch, preprocess=False, postprocess=True)
+        
+        if isinstance(y_hat, (list, tuple)):
+            y_hat = y_hat[0]
+        
+        # 获取真实值和mask
+        y = batch.y.to(device)
+        eval_mask = batch.eval_mask.to(device)
+        y_hat = y_hat.to(device)
+        
+        # 返回预测结果、真实值和mask
+        return {
+            'y_hat': y_hat,
+            'y': y,
+            'mask': eval_mask
+        }
 
     @staticmethod
     def add_argparse_args(parser, **kwargs):

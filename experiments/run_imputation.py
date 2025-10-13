@@ -376,19 +376,49 @@ def run_experiment(args):
     # 创建测试用的trainer
     test_trainer = pl.Trainer(accelerator='gpu', devices=1, precision=args.precision)
     
-    # 使用 PyTorch Lightning 的方式加载最佳模型
-    print(f"开始测试，使用模型: {best_model_path}")
+    # 从checkpoint加载模型权重
+    if best_model_path is not None:
+        print(f"开始测试，从checkpoint加载模型: {best_model_path}")
+        # 使用 load_from_checkpoint 加载模型
+        imputer = imputer_class.load_from_checkpoint(
+            best_model_path,
+            model_class=model_cls,
+            model_kwargs=model_kwargs,
+            optim_class=torch.optim.Adam,
+            optim_kwargs={'lr': args.lr, 'weight_decay': args.l2_reg},
+            loss_fn=loss_fn,
+            metrics=metrics,
+            scheduler_class=scheduler_class,
+            scheduler_kwargs=scheduler_kwargs,
+            **imputer_kwargs
+        )
+    else:
+        print("使用当前训练好的模型进行测试")
+    
+    # 测试
     test_trainer.test(imputer, dataloaders=dm.test_dataloader(
-        batch_size=args.batch_inference),
-        ckpt_path=best_model_path)
+        batch_size=args.batch_inference))
 
-    output = test_trainer.predict(imputer, dataloaders=dm.test_dataloader(
-        batch_size=args.batch_inference),
-        ckpt_path=best_model_path)
-    output = casting.numpy(output)
-    y_hat, y_true, mask = output['y_hat'].squeeze(-1), \
-                          output['y'].squeeze(-1), \
-                          output['mask'].squeeze(-1)
+    # 预测
+    output_list = test_trainer.predict(imputer, dataloaders=dm.test_dataloader(
+        batch_size=args.batch_inference))
+    
+    # 将字典列表合并为单个字典，每个键包含所有批次的拼接结果
+    # output_list 是一个字典列表，每个字典包含 'y_hat', 'y', 'mask'
+    y_hat_list = []
+    y_list = []
+    mask_list = []
+    
+    for batch_output in output_list:
+        y_hat_list.append(batch_output['y_hat'].detach().cpu())
+        y_list.append(batch_output['y'].detach().cpu())
+        mask_list.append(batch_output['mask'].detach().cpu())
+    
+    # 拼接所有批次
+    y_hat = torch.cat(y_hat_list, dim=0).numpy().squeeze(-1)
+    y_true = torch.cat(y_list, dim=0).numpy().squeeze(-1)
+    mask = torch.cat(mask_list, dim=0).numpy().squeeze(-1)
+    
     check_mae = numpy_metrics.masked_mae(y_hat, y_true, mask)
     print(f'Test MAE: {check_mae:.2f}')
     return y_hat
