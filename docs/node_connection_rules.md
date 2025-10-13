@@ -6,15 +6,24 @@
 
 ## 数据格式
 
-### 输入数据格式
+### 静态道路数据格式
 
-在原始数据中添加 `node_connections` 列来指定每个节点的连接规则：
+节点连接规则存储在**静态道路数据**中，与动态交通数据分离：
 
+**静态道路数据 (static_road_data.csv):**
 ```csv
-timestamp,lane_id,spatial_id,speed,spacing,node_connections
-2024-01-01 00:00:00,lane_0,lane_0_0000,30.5,25.2,"lane_0_0001,direct;lane_1_0000,dashed;lane_2_0032,dashed"
-2024-01-01 00:00:00,lane_0,lane_0_0001,32.1,23.8,"lane_0_0000,direct;lane_0_0002,direct;lane_1_0001,dashed"
-2024-01-01 00:00:00,lane_1,lane_1_0000,28.9,26.5,"lane_1_0001,direct;lane_0_0000,dashed;lane_2_0000,dashed"
+lane_id,spatial_id,node_connections
+lane_0,lane_0_0000,"lane_0_0001,direct;lane_1_0000,dashed;lane_2_0032,dashed"
+lane_0,lane_0_0001,"lane_0_0000,direct;lane_0_0002,direct;lane_1_0001,dashed"
+lane_1,lane_1_0000,"lane_1_0001,direct;lane_0_0000,dashed;lane_2_0000,dashed"
+```
+
+**动态交通数据 (dynamic_traffic_data.csv):**
+```csv
+timestamp,spatial_id,speed,spacing
+2024-01-01 00:00:00,lane_0_0000,30.5,25.2
+2024-01-01 00:00:00,lane_0_0001,32.1,23.8
+2024-01-01 00:00:00,lane_1_0000,28.9,26.5
 ```
 
 ### 连接规则格式
@@ -31,11 +40,11 @@ timestamp,lane_id,spatial_id,speed,spacing,node_connections
 
 ### 连接类型
 
-| 类型 | 描述 | 图连接 | 说明 |
-|------|------|--------|------|
-| `direct` | 直通连接 | ✅ 建立连接 | 同一车道内相邻节点 |
-| `dashed` | 虚线连接 | ✅ 建立连接 | 跨车道连接 |
-| `solid` | 实线连接 | ❌ 不建立连接 | 禁止连接 |
+| 类型 | 描述 | 图连接 | 连接权重 | 说明 |
+|------|------|--------|----------|------|
+| `direct` | 直通连接 | ✅ 建立连接 | 1.0 | 同一车道内相邻节点 |
+| `dashed` | 虚线连接 | ✅ 建立连接 | 0.5 | 跨车道连接 |
+| `solid` | 实线连接 | ❌ 不建立连接 | 0.0 | 禁止连接 |
 
 ## 实现原理
 
@@ -67,9 +76,11 @@ def _parse_node_connections(self, connections):
 ```python
 def _add_node_connections(self, adj_matrix, spatial_to_connections):
     for target_spatial_id, connection_type in connections.items():
-        if connection_type in ['direct', 'dashed']:
-            weight = 1.0  # 建立连接
-        elif connection_type in ['solid']:
+        if connection_type in ['direct', 'straight']:
+            weight = 1.0  # 直通连接
+        elif connection_type == 'dashed':
+            weight = 0.5  # 虚线连接
+        elif connection_type in ['indirect', 'solid']:
             weight = 0.0  # 不连接
 ```
 
@@ -80,50 +91,65 @@ def _add_node_connections(self, adj_matrix, spatial_to_connections):
 ```python
 from spin.datasets.lane_traffic_dataset import LaneTrafficDataset
 
-# 加载包含节点连接规则的数据
+# 加载分离格式的数据（包含节点连接规则）
 dataset = LaneTrafficDataset(
-    data_path="lane_data_with_node_connections.csv",
+    static_data_path="static_road_data.csv",
+    dynamic_data_path="dynamic_traffic_data.csv",
     node_connections_col='node_connections'
 )
 
 # 获取图连接矩阵
 adj = dataset.get_connectivity()
+print(f"图连接矩阵形状: {adj.shape}")
+print(f"连接数: {np.sum(adj > 0) // 2}")
 ```
 
-### 2. 创建节点连接规则
+### 2. 创建静态道路数据（包含节点连接规则）
 
 ```python
 from spin.datasets.lane_data_utils import LaneDataProcessor
+import pandas as pd
 
 processor = LaneDataProcessor()
 
-# 定义节点连接规则
-node_connection_rules = [
-    {
-        'spatial_id': 'lane_0_0000',
-        'connections': {
-            'lane_0_0001': 'direct',    # 与 lane_0_0001 直通连接
-            'lane_1_0000': 'dashed',    # 与 lane_1_0000 虚线连接
-            'lane_2_0032': 'dashed'     # 与 lane_2_0032 虚线连接
-        }
-    }
-]
-
-# 创建节点连接规则
-node_rules = processor.create_node_connection_rules(
-    spatial_ids=['lane_0_0000', 'lane_0_0001'],
-    connection_rules=node_connection_rules
+# 方法1: 自动生成
+static_data = processor.create_static_road_data(
+    n_lanes=3,
+    lane_length=1000.0,
+    seed=42
 )
+
+# 方法2: 手动定义
+static_data = pd.DataFrame([
+    {
+        'lane_id': 'lane_0',
+        'spatial_id': 'lane_0_0000',
+        'node_connections': 'lane_0_0001,direct;lane_1_0000,dashed;lane_2_0032,dashed'
+    },
+    {
+        'lane_id': 'lane_0',
+        'spatial_id': 'lane_0_0001',
+        'node_connections': 'lane_0_0000,direct;lane_0_0002,direct;lane_1_0001,dashed'
+    }
+])
+
+# 保存静态道路数据
+processor.save_data(static_data, "static_road_data.csv", format='csv')
 ```
 
-### 3. 处理原始数据
+### 3. 完整示例：创建分离格式数据
 
 ```python
-# 处理包含节点连接规则的原始数据
-processed_data = processor.process_raw_data(
-    raw_data=your_raw_data,
-    lane_info=lane_rules
+from spin.datasets.lane_data_utils import create_separated_sample_dataset
+
+# 一键创建分离格式的示例数据
+static_data, dynamic_data = create_separated_sample_dataset(
+    static_output_path="static_road_data.csv",
+    dynamic_output_path="dynamic_traffic_data.csv"
 )
+
+print(f"静态数据: {static_data.shape[0]} 个节点")
+print(f"动态数据: {dynamic_data.shape[0]} 条记录")
 ```
 
 ## 高级配置

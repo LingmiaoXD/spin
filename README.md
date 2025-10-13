@@ -26,23 +26,38 @@ The directory is structured as follows:
 ```
 .
 ├── config/
-│   ├── imputation/
-│   │   ├── brits.yaml
-│   │   ├── grin.yaml
-│   │   ├── saits.yaml
-│   │   ├── spin.yaml
-│   │   ├── spin_h.yaml
-│   │   └── transformer.yaml
-│   └── inference.yaml
+│   ├── imputation/
+│   │   ├── brits.yaml
+│   │   ├── grin.yaml
+│   │   ├── saits.yaml
+│   │   ├── spin.yaml
+│   │   ├── spin_h.yaml
+│   │   ├── spin_lane.yaml
+│   │   └── transformer.yaml
+│   └── inference.yaml
+├── docs/
+│   ├── data_structure.md
+│   ├── lane_traffic_dataset.md
+│   ├── node_connection_rules.md
+│   └── user_defined_mask.md
+├── examples/
+│   ├── lane_interaction_example.py
+│   ├── lane_traffic_example.py
+│   ├── node_connection_example.py
+│   ├── separated_data_example.py
+│   └── user_defined_mask_example.py
 ├── experiments/
-│   ├── run_imputation.py
-│   └── run_inference.py
+│   ├── run_imputation.py
+│   └── run_inference.py
 ├── spin/
-│   ├── baselines/
-│   ├── imputers/
-│   ├── layers/
-│   ├── models/
-│   └── ...
+│   ├── baselines/
+│   ├── datasets/
+│   │   ├── lane_data_utils.py
+│   │   └── lane_traffic_dataset.py
+│   ├── imputers/
+│   ├── layers/
+│   ├── models/
+│   └── ...
 ├── conda_env.yaml
 └── tsl_config.yaml
 
@@ -82,6 +97,48 @@ The scripts used for the experiment in the paper are in the `experiments` folder
 	conda activate spin
 	python ./experiments/run_inference.py --config inference.yaml --model-name spin --dataset-name bay_point --exp-name {exp_name}
 	```
+
+## Lane-Level Traffic Dataset
+
+This repository now includes support for lane-level traffic data with 10m×10s spatiotemporal grids. The dataset supports:
+
+- **Separated data structure**: Static road data (lane_id, spatial_id, node_connections) and dynamic traffic data (timestamp, spatial_id, speed, spacing)
+- **User-defined masks**: Precise control over which observations are known/unknown at each timestamp
+- **Graph connectivity**: Node-level connections based on lane relationships
+
+### Quick Start
+
+```python
+from spin.datasets.lane_traffic_dataset import LaneTrafficDataset
+
+# Load dataset with user-defined mask
+dataset = LaneTrafficDataset(
+    static_data_path='data/static_road_data.csv',
+    dynamic_data_path='data/dynamic_traffic_data.csv',
+    mask_data_path='data/mask.csv',  # Optional: specify which observations are known
+    time_col='timestamp',
+    spatial_id_col='spatial_id',
+    speed_col='speed',
+    spacing_col='spacing'
+)
+```
+
+### User-Defined Masks
+
+The dataset supports custom observation masks in three formats:
+
+1. **CSV Format**: Flexible control with `timestamp`, `spatial_id`, `is_observed` columns
+2. **NPZ Format**: Direct mask matrix `[n_times, n_spaces]` or `[n_times, n_spaces, n_features]`
+3. **PKL Format**: Python objects with mask arrays
+
+See [`docs/user_defined_mask.md`](docs/user_defined_mask.md) for detailed documentation and [`examples/user_defined_mask_example.py`](examples/user_defined_mask_example.py) for examples.
+
+### Documentation
+
+- [`docs/data_structure.md`](docs/data_structure.md): Data structure overview
+- [`docs/lane_traffic_dataset.md`](docs/lane_traffic_dataset.md): Dataset usage guide
+- [`docs/node_connection_rules.md`](docs/node_connection_rules.md): Graph connectivity rules
+- [`docs/user_defined_mask.md`](docs/user_defined_mask.md): User-defined mask guide
 
 ## Bibtex reference
 

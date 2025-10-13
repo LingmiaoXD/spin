@@ -23,8 +23,7 @@ class LaneDataProcessor:
                  time_col: str = 'timestamp',
                  lane_id_col: str = 'lane_id',
                  spatial_id_col: str = 'spatial_id',
-                 lane_interaction_col: str = 'lane_interaction',  # 车道交互列
-                 node_connections_col: str = 'node_connections'):  # 新增：节点连接列
+                 node_connections_col: str = 'node_connections'):
         """
         初始化数据处理器
         
@@ -44,7 +43,6 @@ class LaneDataProcessor:
         self.time_col = time_col
         self.lane_id_col = lane_id_col
         self.spatial_id_col = spatial_id_col
-        self.lane_interaction_col = lane_interaction_col
         self.node_connections_col = node_connections_col
         
     def process_raw_data(self, 
@@ -148,11 +146,6 @@ class LaneDataProcessor:
                     avg_speed = np.nan
                     avg_spacing = np.nan
                 
-                # 生成车道交互规则
-                lane_interaction = self._generate_lane_interaction(
-                    lane_id, spatial_pos, lane_info
-                )
-                
                 # 生成节点连接规则
                 node_connections = self._generate_node_connections(
                     spatial_id, lane_id, spatial_pos, lane_info
@@ -164,7 +157,6 @@ class LaneDataProcessor:
                     self.spatial_id_col: spatial_id,
                     self.speed_col: avg_speed,
                     self.spacing_col: avg_spacing,
-                    self.lane_interaction_col: lane_interaction,
                     self.node_connections_col: node_connections,
                     'spatial_position': spatial_pos,
                     'temporal_index': t,
@@ -172,98 +164,6 @@ class LaneDataProcessor:
                 })
                 
         return pd.DataFrame(grid_data)
-        
-    def _generate_lane_interaction(self, lane_id: str, spatial_pos: float, 
-                                  lane_info: Optional[Dict] = None) -> str:
-        """
-        生成车道交互规则
-        
-        Args:
-            lane_id: 车道ID
-            spatial_pos: 空间位置
-            lane_info: 车道信息字典
-            
-        Returns:
-            车道交互规则字符串
-        """
-        if lane_info and lane_id in lane_info:
-            lane_data = lane_info[lane_id]
-            
-            # 检查是否有预定义的交互规则
-            if 'interaction_rules' in lane_data:
-                rules = lane_data['interaction_rules']
-                for rule in rules:
-                    start_pos, end_pos, interaction_type = rule
-                    if start_pos <= spatial_pos <= end_pos:
-                        return interaction_type
-            
-            # 检查是否有默认的交互类型
-            if 'default_interaction' in lane_data:
-                return lane_data['default_interaction']
-        
-        # 默认规则：基于车道ID和位置的简单规则
-        # 这里可以根据实际需求实现更复杂的规则
-        return self._get_default_interaction_rule(lane_id, spatial_pos)
-        
-    def _get_default_interaction_rule(self, lane_id: str, spatial_pos: float) -> str:
-        """
-        获取默认的车道交互规则
-        
-        这里实现一个简单的规则示例：
-        - 相邻车道在特定位置可以交互（虚线）
-        - 其他位置不允许交互（实线）
-        """
-        # 解析车道ID，假设格式为 "lane_X"
-        try:
-            lane_num = int(lane_id.split('_')[1])
-        except:
-            lane_num = 0
-            
-        # 简单的规则：每隔一定距离允许交互
-        interaction_interval = 200.0  # 每200米
-        interaction_zone = int(spatial_pos / interaction_interval) % 2 == 0
-        
-        if interaction_zone:
-            return 'dashed'  # 虚线，可以交互
-        else:
-            return 'solid'   # 实线，不可以交互
-            
-    def create_lane_interaction_rules(self, 
-                                    lane_ids: List[str],
-                                    interaction_zones: List[Dict]) -> Dict:
-        """
-        创建车道交互规则
-        
-        Args:
-            lane_ids: 车道ID列表
-            interaction_zones: 交互区域列表，格式：
-                [{'lanes': ['lane_0', 'lane_1'], 'start_pos': 0, 'end_pos': 500, 'type': 'dashed'}]
-                
-        Returns:
-            车道交互规则字典
-        """
-        lane_rules = {}
-        
-        for lane_id in lane_ids:
-            lane_rules[lane_id] = {
-                'interaction_rules': [],
-                'default_interaction': 'solid'  # 默认不允许交互
-            }
-            
-        # 为每个交互区域添加规则
-        for zone in interaction_zones:
-            lanes = zone['lanes']
-            start_pos = zone['start_pos']
-            end_pos = zone['end_pos']
-            interaction_type = zone['type']
-            
-            for lane_id in lanes:
-                if lane_id in lane_rules:
-                    lane_rules[lane_id]['interaction_rules'].append(
-                        (start_pos, end_pos, interaction_type)
-                    )
-                    
-        return lane_rules
         
     def _generate_node_connections(self, spatial_id: str, lane_id: str, 
                                  spatial_pos: float, lane_info: Optional[Dict] = None) -> str:
@@ -376,6 +276,157 @@ class LaneDataProcessor:
                 
         return node_rules
         
+    def create_static_road_data(self,
+                               n_lanes: int = 3,
+                               lane_length: float = 1000.0,
+                               seed: int = 42) -> pd.DataFrame:
+        """
+        创建静态道路数据
+        
+        Args:
+            n_lanes: 车道数量
+            lane_length: 车道长度（米）
+            seed: 随机种子
+        
+        Returns:
+            静态道路数据DataFrame，包含 lane_id, spatial_id, node_connections
+        """
+        np.random.seed(seed)
+        
+        # 创建空间网格
+        n_spatial_points = int(lane_length / self.spatial_resolution)
+        
+        static_data = []
+        
+        for lane_id in range(n_lanes):
+            for s in range(n_spatial_points):
+                spatial_id = f"lane_{lane_id}_{s:04d}"
+                
+                # 生成节点连接规则
+                node_connections = self._get_default_node_connections(
+                    spatial_id, f"lane_{lane_id}", s * self.spatial_resolution
+                )
+                
+                static_data.append({
+                    self.lane_id_col: f"lane_{lane_id}",
+                    self.spatial_id_col: spatial_id,
+                    self.node_connections_col: node_connections
+                })
+        
+        static_df = pd.DataFrame(static_data)
+        print(f"静态道路数据创建完成: {len(static_df)} 个节点")
+        
+        return static_df
+    
+    def create_dynamic_traffic_data(self,
+                                   static_data: pd.DataFrame,
+                                   time_hours: float = 24.0,
+                                   seed: int = 42) -> pd.DataFrame:
+        """
+        创建动态交通数据
+        
+        Args:
+            static_data: 静态道路数据DataFrame
+            time_hours: 时间长度（小时）
+            seed: 随机种子
+        
+        Returns:
+            动态交通数据DataFrame，包含 timestamp, spatial_id, speed, spacing
+        """
+        np.random.seed(seed)
+        
+        # 创建时间序列
+        start_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        time_range = pd.date_range(
+            start=start_time,
+            periods=int(time_hours * 3600 / self.temporal_resolution),
+            freq=f'{self.temporal_resolution}s'
+        )
+        
+        dynamic_data = []
+        
+        # 获取所有空间节点
+        spatial_nodes = static_data[[self.spatial_id_col, self.lane_id_col]].to_dict('records')
+        
+        for t, timestamp in enumerate(time_range):
+            for node in spatial_nodes:
+                spatial_id = node[self.spatial_id_col]
+                lane_id = node[self.lane_id_col]
+                
+                # 解析空间位置
+                try:
+                    spatial_pos = int(spatial_id.split('_')[2]) * self.spatial_resolution
+                except:
+                    spatial_pos = 0
+                
+                # 生成模拟的速度和间距数据
+                hour = timestamp.hour
+                time_factor = 1.0 + 0.5 * np.sin(2 * np.pi * hour / 24)
+                
+                # 添加空间变化
+                try:
+                    lane_num = int(lane_id.split('_')[1])
+                    lane_length = spatial_pos
+                    spatial_factor = 1.0 + 0.3 * np.sin(2 * np.pi * spatial_pos / 1000.0)
+                except:
+                    spatial_factor = 1.0
+                
+                # 添加随机噪声
+                noise = np.random.normal(0, 0.1)
+                
+                # 生成速度和间距
+                base_speed = 30.0 * time_factor * spatial_factor + noise * 5
+                base_spacing = 20.0 / time_factor + noise * 2
+                
+                # 确保数据在合理范围内
+                speed = np.clip(base_speed, 0, 60)
+                spacing = np.clip(base_spacing, 5, 50)
+                
+                dynamic_data.append({
+                    self.time_col: timestamp,
+                    self.spatial_id_col: spatial_id,
+                    self.speed_col: speed,
+                    self.spacing_col: spacing
+                })
+        
+        dynamic_df = pd.DataFrame(dynamic_data)
+        print(f"动态交通数据创建完成: {len(dynamic_df)} 条记录 ({len(time_range)} 时间步 × {len(spatial_nodes)} 节点)")
+        
+        return dynamic_df
+    
+    def extract_static_data(self, mixed_data: pd.DataFrame) -> pd.DataFrame:
+        """
+        从混合数据中提取静态道路数据
+        
+        Args:
+            mixed_data: 混合格式的数据DataFrame
+        
+        Returns:
+            静态道路数据DataFrame
+        """
+        static_cols = [self.lane_id_col, self.spatial_id_col, self.node_connections_col]
+        
+        static_data = mixed_data[static_cols].drop_duplicates(subset=[self.spatial_id_col]).reset_index(drop=True)
+        
+        print(f"提取静态数据: {len(static_data)} 个节点")
+        return static_data
+    
+    def extract_dynamic_data(self, mixed_data: pd.DataFrame) -> pd.DataFrame:
+        """
+        从混合数据中提取动态交通数据
+        
+        Args:
+            mixed_data: 混合格式的数据DataFrame
+        
+        Returns:
+            动态交通数据DataFrame
+        """
+        dynamic_cols = [self.time_col, self.spatial_id_col, self.speed_col, self.spacing_col]
+        dynamic_data = mixed_data[dynamic_cols].copy()
+        
+        print(f"提取动态数据: {len(dynamic_data)} 条记录")
+        return dynamic_data
+    
     def create_sample_data(self, 
                           n_lanes: int = 5,
                           lane_length: float = 1000.0,
@@ -435,9 +486,6 @@ class LaneDataProcessor:
                     speed = np.clip(base_speed, 0, 60)
                     spacing = np.clip(base_spacing, 5, 50)
                     
-                    # 生成车道交互规则
-                    lane_interaction = self._get_default_interaction_rule(f"lane_{lane_id}", spatial_pos)
-                    
                     # 生成节点连接规则
                     node_connections = self._get_default_node_connections(
                         spatial_id, f"lane_{lane_id}", spatial_pos
@@ -449,7 +497,6 @@ class LaneDataProcessor:
                         self.spatial_id_col: spatial_id,
                         self.speed_col: speed,
                         self.spacing_col: spacing,
-                        self.lane_interaction_col: lane_interaction,
                         self.node_connections_col: node_connections,
                         'spatial_position': spatial_pos,
                         'temporal_index': t,
@@ -555,7 +602,7 @@ class LaneDataProcessor:
 
 
 def create_sample_dataset(output_path: str = "sample_lane_data.csv"):
-    """创建示例数据集"""
+    """创建示例数据集（旧格式，混合数据）"""
     processor = LaneDataProcessor()
     
     # 创建示例数据
@@ -576,6 +623,195 @@ def create_sample_dataset(output_path: str = "sample_lane_data.csv"):
         print("❌ 示例数据集验证失败")
         
     return sample_data
+
+
+def create_separated_sample_dataset(static_output_path: str = "static_road_data.csv",
+                                   dynamic_output_path: str = "dynamic_traffic_data.csv"):
+    """创建分离格式的示例数据集（新格式）"""
+    processor = LaneDataProcessor()
+    
+    # 创建静态道路数据
+    static_data = processor.create_static_road_data(
+        n_lanes=3,
+        lane_length=1000.0,
+        seed=42
+    )
+    
+    # 创建动态交通数据
+    dynamic_data = processor.create_dynamic_traffic_data(
+        static_data=static_data,
+        time_hours=2.0,
+        seed=42
+    )
+    
+    # 保存数据
+    processor.save_data(static_data, static_output_path, format='csv')
+    processor.save_data(dynamic_data, dynamic_output_path, format='csv')
+    
+    # 验证数据
+    static_valid = validate_static_data(static_data)
+    dynamic_valid = validate_dynamic_data(dynamic_data, static_data)
+    
+    if static_valid[0] and dynamic_valid[0]:
+        print("✅ 分离格式示例数据集创建成功")
+        print(f"   静态数据: {static_output_path}")
+        print(f"   动态数据: {dynamic_output_path}")
+    else:
+        print("❌ 数据验证失败")
+        if not static_valid[0]:
+            print(f"   静态数据错误: {static_valid[1]}")
+        if not dynamic_valid[0]:
+            print(f"   动态数据错误: {dynamic_valid[1]}")
+        
+    return static_data, dynamic_data
+
+
+def migrate_to_separated_format(mixed_data: pd.DataFrame,
+                                static_cols: List[str] = None,
+                                dynamic_cols: List[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    将混合格式数据迁移到分离格式
+    
+    Args:
+        mixed_data: 混合格式的数据DataFrame
+        static_cols: 静态数据列名列表，默认 ['lane_id', 'spatial_id', 'node_connections']
+        dynamic_cols: 动态数据列名列表，默认 ['timestamp', 'spatial_id', 'speed', 'spacing']
+    
+    Returns:
+        (static_data, dynamic_data) 元组
+    """
+    if static_cols is None:
+        static_cols = ['lane_id', 'spatial_id', 'node_connections']
+    if dynamic_cols is None:
+        dynamic_cols = ['timestamp', 'spatial_id', 'speed', 'spacing']
+    
+    # 提取静态数据（去重）
+    static_data = mixed_data[static_cols].drop_duplicates(subset=['spatial_id']).reset_index(drop=True)
+    
+    # 提取动态数据
+    dynamic_data = mixed_data[dynamic_cols].copy()
+    
+    print(f"迁移完成:")
+    print(f"  静态数据: {static_data.shape[0]} 个节点")
+    print(f"  动态数据: {dynamic_data.shape[0]} 条记录")
+    
+    return static_data, dynamic_data
+
+
+def validate_static_data(static_data: pd.DataFrame) -> Tuple[bool, List[str]]:
+    """
+    验证静态道路数据
+    
+    Args:
+        static_data: 静态数据DataFrame
+    
+    Returns:
+        (is_valid, errors) 元组
+    """
+    errors = []
+    
+    # 检查必需字段
+    required_cols = ['lane_id', 'spatial_id', 'node_connections']
+    for col in required_cols:
+        if col not in static_data.columns:
+            errors.append(f"缺少必需列: {col}")
+    
+    if errors:
+        return False, errors
+    
+    # 检查 spatial_id 唯一性
+    if static_data['spatial_id'].duplicated().any():
+        errors.append("spatial_id 存在重复值")
+    
+    # 检查 node_connections 格式
+    for idx, row in static_data.iterrows():
+        connections = row['node_connections']
+        if pd.notna(connections):
+            if not isinstance(connections, (str, dict)):
+                errors.append(f"节点 {row['spatial_id']} 的连接规则格式错误")
+    
+    # 检查连接目标节点是否存在
+    all_spatial_ids = set(static_data['spatial_id'])
+    for idx, row in static_data.iterrows():
+        connections = row['node_connections']
+        if pd.notna(connections):
+            parsed = _parse_connections_for_validation(connections)
+            for target in parsed.keys():
+                if target not in all_spatial_ids:
+                    errors.append(f"节点 {row['spatial_id']} 的连接目标 {target} 不存在")
+    
+    return len(errors) == 0, errors
+
+
+def validate_dynamic_data(dynamic_data: pd.DataFrame, 
+                         static_data: pd.DataFrame = None) -> Tuple[bool, List[str]]:
+    """
+    验证动态交通数据
+    
+    Args:
+        dynamic_data: 动态数据DataFrame
+        static_data: 静态数据DataFrame（可选，用于检查一致性）
+    
+    Returns:
+        (is_valid, errors) 元组
+    """
+    errors = []
+    
+    # 检查必需字段
+    required_cols = ['timestamp', 'spatial_id', 'speed', 'spacing']
+    for col in required_cols:
+        if col not in dynamic_data.columns:
+            errors.append(f"缺少必需列: {col}")
+    
+    if errors:
+        return False, errors
+    
+    # 检查时间戳格式
+    try:
+        pd.to_datetime(dynamic_data['timestamp'])
+    except:
+        errors.append("timestamp 列格式错误，无法转换为日期时间")
+    
+    # 检查数值范围
+    if dynamic_data['speed'].min() < 0 or dynamic_data['speed'].max() > 200:
+        errors.append(f"速度值超出合理范围: [{dynamic_data['speed'].min()}, {dynamic_data['speed'].max()}]")
+    
+    if dynamic_data['spacing'].min() < 0 or dynamic_data['spacing'].max() > 200:
+        errors.append(f"间距值超出合理范围: [{dynamic_data['spacing'].min()}, {dynamic_data['spacing'].max()}]")
+    
+    # 检查与静态数据的一致性
+    if static_data is not None:
+        static_spatial_ids = set(static_data['spatial_id'])
+        dynamic_spatial_ids = set(dynamic_data['spatial_id'])
+        
+        missing_in_static = dynamic_spatial_ids - static_spatial_ids
+        if missing_in_static:
+            errors.append(f"动态数据中有 {len(missing_in_static)} 个 spatial_id 在静态数据中不存在")
+    
+    # 检查缺失值
+    missing_ratio = dynamic_data[required_cols].isnull().sum().sum() / (len(dynamic_data) * len(required_cols))
+    if missing_ratio > 0.5:
+        errors.append(f"缺失值比例过高: {missing_ratio:.3f}")
+    
+    return len(errors) == 0, errors
+
+
+def _parse_connections_for_validation(connections):
+    """解析连接规则用于验证"""
+    if isinstance(connections, dict):
+        return connections
+    elif isinstance(connections, str):
+        try:
+            return json.loads(connections)
+        except:
+            result = {}
+            for connection in connections.split(';'):
+                if ',' in connection:
+                    target, conn_type = connection.strip().split(',', 1)
+                    result[target.strip()] = conn_type.strip()
+            return result
+    else:
+        return {}
 
 
 if __name__ == "__main__":
