@@ -210,46 +210,6 @@ complex_connections = [
 ]
 ```
 
-## 数据格式示例
-
-### 1. CSV格式
-
-```csv
-timestamp,lane_id,spatial_id,speed,spacing,node_connections
-2024-01-01 00:00:00,lane_0,lane_0_0000,30.5,25.2,"lane_0_0001,direct;lane_1_0000,dashed"
-2024-01-01 00:00:00,lane_0,lane_0_0001,32.1,23.8,"lane_0_0000,direct;lane_0_0002,direct;lane_1_0001,dashed"
-2024-01-01 00:00:00,lane_1,lane_1_0000,28.9,26.5,"lane_1_0001,direct;lane_0_0000,dashed"
-```
-
-### 2. JSON格式
-
-```json
-{
-  "timestamp": "2024-01-01 00:00:00",
-  "lane_id": "lane_0",
-  "spatial_id": "lane_0_0000",
-  "speed": 30.5,
-  "spacing": 25.2,
-  "node_connections": "{\"lane_0_0001\": \"direct\", \"lane_1_0000\": \"dashed\"}"
-}
-```
-
-### 3. 字典格式
-
-```python
-data = {
-    'timestamp': '2024-01-01 00:00:00',
-    'lane_id': 'lane_0',
-    'spatial_id': 'lane_0_0000',
-    'speed': 30.5,
-    'spacing': 25.2,
-    'node_connections': {
-        'lane_0_0001': 'direct',
-        'lane_1_0000': 'dashed'
-    }
-}
-```
-
 ## 可视化
 
 ### 1. 连接规则可视化

@@ -226,7 +226,7 @@ else:
 | 类型 | 描述 | 图连接权重 | 使用场景 |
 |------|------|-----------|----------|
 | `direct` | 直通连接 | 1.0 | 同一车道内相邻节点 |
-| `dashed` | 虚线连接 | 1.0 | 允许变道的跨车道连接 |
+| `dashed` | 虚线连接 | 0.5 | 允许变道的跨车道连接 |
 | `solid` | 实线连接 | 0.0 | 禁止变道的跨车道分隔 |
 
 ### 连接规则格式
@@ -257,18 +257,6 @@ else:
 
 ## 性能优化
 
-### 存储优化
-
-分离数据设计的优势：
-
-1. **减少冗余**：静态数据只存储一次，不在每个时间步重复
-   - 传统方式：`n_timestamps × n_nodes` 条静态数据记录
-   - 分离方式：`n_nodes` 条静态数据记录
-   - **节省比例**：约 `(n_timestamps - 1) / n_timestamps` （例如1000个时间步节省99.9%）
-
-2. **提高读取效率**：只需读取一次静态数据
-3. **便于更新**：修改道路结构无需更新所有时间步的数据
-
 ### 内存优化
 
 ```python
@@ -279,30 +267,6 @@ dataset = LaneTrafficDataset(
     use_cache=True,                    # 启用缓存
     cache_dir="./cache"                # 缓存目录
 )
-```
-
-## 数据迁移指南
-
-### 从旧格式迁移到新格式
-
-如果您有旧格式的数据（静态和动态信息混合），可以使用以下方法迁移：
-
-```python
-from spin.datasets.lane_data_utils import migrate_to_separated_format
-
-# 读取旧格式数据
-old_data = pd.read_csv("old_lane_data.csv")
-
-# 迁移到新格式
-static_data, dynamic_data = migrate_to_separated_format(
-    old_data,
-    static_cols=['lane_id', 'spatial_id', 'node_connections'],
-    dynamic_cols=['timestamp', 'spatial_id', 'speed', 'spacing']
-)
-
-# 保存新格式数据
-static_data.to_csv("static_road_data.csv", index=False)
-dynamic_data.to_csv("dynamic_traffic_data.csv", index=False)
 ```
 
 ## 配置文件示例
@@ -334,12 +298,6 @@ dataset:
 
 ## 最佳实践
 
-### 1. 数据组织
-
-- 将静态数据和动态数据放在不同的文件中
-- 使用清晰的文件命名：`static_road_data.csv`, `dynamic_traffic_data.csv`
-- 为不同数据集创建独立的目录
-
 ### 2. 数据更新
 
 - 静态数据应该保持稳定，仅在道路结构变化时更新
@@ -351,12 +309,6 @@ dataset:
 - 在加载数据前进行验证
 - 确保静态数据和动态数据的 `spatial_id` 一致
 - 检查连接规则的完整性和正确性
-
-### 4. 性能考虑
-
-- 对于大规模数据，考虑使用 HDF5 或 Parquet 格式
-- 启用数据缓存减少重复读取
-- 使用数据分块处理超大数据集
 
 ## 示例数据集
 
@@ -372,13 +324,6 @@ data/
   └── dynamic_traffic_data.csv  # 动态交通数据
 ```
 
-## 技术支持
-
-如有问题，请参考：
-1. `examples/` 目录中的示例代码
-2. `docs/` 目录中的详细文档
-3. 项目 README 文件
-
 ## 总结
 
 采用静态和动态数据分离的设计具有以下优势：
@@ -388,4 +333,5 @@ data/
 ✅ **便于维护** - 道路结构更新无需修改全部数据  
 ✅ **灵活性强** - 可以独立更新静态或动态数据  
 ✅ **性能优化** - 减少数据读取和内存占用
+
 

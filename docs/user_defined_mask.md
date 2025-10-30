@@ -146,25 +146,6 @@ with open('mask.pkl', 'wb') as f:
 
 ## 应用场景
 
-### 场景1：固定传感器部署
-
-某些spatial_id对应的位置部署了传感器，数据始终可用；而其他位置没有传感器，数据需要预测。
-
-```python
-# 假设只有主干道部署了传感器
-main_road_ids = ['lane_0_0000', 'lane_0_0001', 'lane_0_0002']
-
-mask_data = []
-for timestamp in timestamps:
-    for spatial_id in all_spatial_ids:
-        is_observed = spatial_id in main_road_ids
-        mask_data.append({
-            'timestamp': timestamp,
-            'spatial_id': spatial_id,
-            'is_observed': is_observed
-        })
-```
-
 ### 场景2：传感器故障
 
 某些时间段某些传感器发生故障，导致数据缺失。
@@ -188,21 +169,6 @@ for timestamp in timestamps:
             'spatial_id': spatial_id,
             'is_observed': is_observed
         })
-```
-
-### 场景3：稀疏采样
-
-由于成本或其他限制，只在部分spatial_id和部分时间戳采集数据。
-
-```python
-import numpy as np
-
-# 随机选择30%的时空位置作为已观测
-n_times = 100
-n_spaces = 50
-mask = np.random.rand(n_times, n_spaces) < 0.3
-
-np.savez('sparse_mask.npz', mask=mask)
 ```
 
 ### 场景4：时变观测模式
@@ -294,4 +260,5 @@ A: 可以。使用三维掩码 `[n_times, n_spaces, n_features]` 即可为每个
 **Q: 掩码文件可以包含额外的列吗？**
 
 A: CSV格式可以包含额外的列，只要包含必需的三列即可。NPZ和PKL格式也可以包含额外的数组或键，但只会使用 `'mask'` 或 `'training_mask'`。
+
 

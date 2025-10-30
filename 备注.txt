@@ -1,3 +1,5 @@
 图神经网络代码项目尝试：
 ①Learning to Reconstruct Missing Data from Spatiotemporal Graphs with Sparse Observations 代码
 github：https://github.com/Graph-Machine-Learning-Group/spin
+
+当前进度：测试数据集已调通，由cursor生成各种匹配路网的数据集格式，未测试
