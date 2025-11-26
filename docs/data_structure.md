@@ -10,44 +10,43 @@
 
 静态道路数据包含不随时间变化的道路结构信息，主要用于定义空间拓扑关系。
 
+`node_connections` 记录有向边和连接的节点，其中连接的节点用 `lane_id` 表示，有向边类型包含三种情况：
+1. **前后直联（direct）**：当前节点与连接的节点属于同一车道。按车流方向，边权重为1
+2. **相邻车道（near）**：当前节点与连接的节点属于相邻车道，边权重根据统计的变道概率计算
+3. **交叉路口对应（crossing）**：当前节点需要通过一个红绿灯控制的路口才能到连接的节点。边权重可能为0/0.5/1，根据红绿灯情况实时调整
+
 #### 数据字段
 
 | 字段名 | 类型 | 描述 | 示例 |
 |--------|------|------|------|
-| `lane_id` | string | 车道标识符 | "lane_0", "lane_1" |
-| `spatial_id` | string | 空间网格标识符 | "lane_0_0000", "lane_0_0001" |
-| `node_connections` | string/dict | 节点连接规则 | "lane_0_0001,direct;lane_1_0000,dashed" |
+| `lane_id` | int | 车道标识符 | 0, 1, 2 |
+| `node_connections` | dict | 节点连接规则 | {"direct": [2], "near": [3], "crossing": [1, 5]} |
 
 #### 数据格式示例
 
-**CSV格式：**
-```csv
-lane_id,spatial_id,node_connections
-lane_0,lane_0_0000,"lane_0_0001,direct;lane_1_0000,dashed"
-lane_0,lane_0_0001,"lane_0_0000,direct;lane_0_0002,direct;lane_1_0001,dashed"
-lane_1,lane_1_0000,"lane_1_0001,direct;lane_0_0000,dashed"
-lane_1,lane_1_0001,"lane_1_0000,direct;lane_1_0002,direct;lane_0_0001,dashed"
-```
-
-**JSON格式：**
+**JSON格式（推荐）：**
 ```json
 {
   "nodes": [
     {
-      "lane_id": "lane_0",
-      "spatial_id": "lane_0_0000",
+      "lane_id": 0,
       "node_connections": {
-        "lane_0_0001": "direct",
-        "lane_1_0000": "dashed"
+        "direct": [1],
+        "near": [3]
       }
     },
     {
-      "lane_id": "lane_0",
-      "spatial_id": "lane_0_0001",
+      "lane_id": 1,
       "node_connections": {
-        "lane_0_0000": "direct",
-        "lane_0_0002": "direct",
-        "lane_1_0001": "dashed"
+        "direct": [0, 2],
+        "near": [4]
+      }
+    },
+    {
+      "lane_id": 2,
+      "node_connections": {
+        "near": [1],
+        "crossing": [4, 5]
       }
     }
   ]
@@ -62,60 +61,61 @@ lane_1,lane_1_0001,"lane_1_0000,direct;lane_1_0002,direct;lane_0_0001,dashed"
 
 | 字段名 | 类型 | 描述 | 单位 | 示例 |
 |--------|------|------|------|------|
-| `timestamp` | datetime | 时间戳 | - | "2024-01-01 00:00:00" |
-| `spatial_id` | string | 空间网格标识符 | - | "lane_0_0000" |
-| `speed` | float | 平均速度 | km/h | 30.5 |
-| `spacing` | float | 平均间距 | m | 25.2 |
+| `lane_id` | int | 车道标识符 | - | 0 |
+| `start_frame` | float | 起始帧/时间戳 | - | 0.0, 10.0 |
+| `avg_speed` | float | 平均速度 | km/h | 0.03 |
+| `avg_occupancy` | float | 平均占有率 | - | 0.4 |
+| `total_vehicles` | float | 车辆总数（归一化） | - | 0.26 |
+| `car_ratio` | float | 小汽车比例 | - | 1.0 |
+| `medium_ratio` | float | 中型车比例 | - | 0.0 |
+| `heavy_ratio` | float | 重型车比例 | - | 0.0 |
+| `motorcycle_ratio` | float | 摩托车比例 | - | 0.0 |
+| `crossing_ratio` | float | 交叉路口转向比例 | - | -1.0（无交叉路段）, 0.5 |
+| `direct_ratio` | float | 直行比例 | - | -1.0（无直行路段）, 1.0 |
+| `near_ratio` | float | 变道比例 | - | -1.0（无变道路段）, 0.3 |
+
+> **注意**：`-1.0` 表示该字段不适用
 
 #### 数据格式示例
 
-**CSV格式：**
+**CSV格式（推荐）：**
 ```csv
-timestamp,spatial_id,speed,spacing
-2024-01-01 00:00:00,lane_0_0000,30.5,25.2
-2024-01-01 00:00:00,lane_0_0001,32.1,23.8
-2024-01-01 00:00:00,lane_1_0000,28.9,26.5
-2024-01-01 00:00:10,lane_0_0000,31.2,24.8
-2024-01-01 00:00:10,lane_0_0001,33.0,23.5
-```
-
-**NPZ格式：**
-```python
-{
-    'timestamps': np.array([...]),    # 时间戳数组
-    'spatial_ids': np.array([...]),   # 空间ID数组
-    'speeds': np.array([...]),        # 速度数组
-    'spacings': np.array([...])       # 间距数组
-}
+lane_id,start_frame,avg_speed,avg_occupancy,total_vehicles,car_ratio,medium_ratio,heavy_ratio,motorcycle_ratio,crossing_ratio,direct_ratio,near_ratio
+0,0.0,0.0,0.4,0.26,1.0,0.0,0.0,0.0,-1.0,0.0,-1.0
+0,10.0,0.0,0.4,0.26,1.0,0.0,0.0,0.0,-1.0,0.0,-1.0
+0,20.0,0.03,0.4,0.26,1.0,0.0,0.0,0.0,-1.0,1.0,-1.0
+1,0.0,0.05,0.35,0.30,0.8,0.1,0.1,0.0,0.5,0.4,0.1
+1,10.0,0.08,0.38,0.32,0.75,0.15,0.1,0.0,0.6,0.3,0.1
 ```
 
 ## 数据关系
 
 ### 关联关系
 
-- **静态道路数据**和**动态交通数据**通过 `spatial_id` 字段关联
-- 每个 `spatial_id` 在静态数据中**有且仅有一条记录**
-- 每个 `spatial_id` 在动态数据中**每个时间步有一条记录**
+- **静态道路数据**和**动态交通数据**通过 `lane_id` 字段关联
+- 每个 `lane_id` 在静态数据中**有且仅有一条记录**
+- 每个 `lane_id` 在动态数据中**每个时间步有一条记录**
 
 ### 数据关系图
 
 ```
-静态道路数据 (static_road_data.csv)
-┌─────────────────────────────────────────┐
-│ lane_id | spatial_id | node_connections │
-├─────────────────────────────────────────┤
-│ lane_0  | lane_0_0000| ...              │◄──┐
-│ lane_0  | lane_0_0001| ...              │   │
-│ lane_1  | lane_1_0000| ...              │   │ spatial_id 关联
-└─────────────────────────────────────────┘   │
-                                              │
-动态交通数据 (dynamic_traffic_data.csv)       │
-┌──────────────────────────────────────┐      │
-│ timestamp | spatial_id | speed | ... │      │
-├──────────────────────────────────────┤      │
-│ 00:00:00  | lane_0_0000| 30.5  | ... │──────┘
-│ 00:00:00  | lane_0_0001| 32.1  | ... │
-│ 00:00:10  | lane_0_0000| 31.2  | ... │
+静态道路数据 (static_road_data.json)
+┌─────────────────────────────────────┐
+│ lane_id | node_connections          │
+├─────────────────────────────────────┤
+│ 0       | {direct:[1], near:[3]}    │◄──┐
+│ 1       | {direct:[0,2], near:[4]}  │   │
+│ 2       | {near:[1], crossing:[4,5]}│   │ lane_id 关联
+└─────────────────────────────────────┘   │
+                                          │
+动态交通数据 (dynamic_traffic_data.csv)   │
+┌──────────────────────────────────────┐  │
+│ lane_id | start_frame | avg_speed...│   │
+├──────────────────────────────────────┤  │
+│ 0       | 0.0         | 0.0    ...  │───┘
+│ 0       | 10.0        | 0.0    ...  │
+│ 1       | 0.0         | 0.05   ...  │
+│ 1       | 10.0        | 0.08   ...  │
 └──────────────────────────────────────┘
 ```
 
@@ -125,11 +125,16 @@ timestamp,spatial_id,speed,spacing
 
 ```python
 from spin.datasets.lane_traffic_dataset import LaneTrafficDataset
+import json
 
-# 加载分离的数据
+# 加载静态道路数据（JSON格式）
+with open("static_road_data.json", "r") as f:
+    static_data = json.load(f)
+
+# 加载动态交通数据（CSV格式）
 dataset = LaneTrafficDataset(
-    static_data_path="static_road_data.csv",      # 静态道路数据
-    dynamic_data_path="dynamic_traffic_data.csv",  # 动态交通数据
+    static_data_path="static_road_data.json",
+    dynamic_data_path="dynamic_traffic_data.csv",
     window_size=12,
     stride=1
 )
@@ -144,80 +149,35 @@ data = dataset.numpy()
 ### 2. 创建数据
 
 ```python
-from spin.datasets.lane_data_utils import LaneDataProcessor
+import json
+import pandas as pd
 
-processor = LaneDataProcessor()
+# 创建静态道路数据（JSON格式）
+static_data = {
+    "nodes": [
+        {"lane_id": 0, "node_connections": {"direct": [1], "near": [3]}},
+        {"lane_id": 1, "node_connections": {"direct": [0, 2], "near": [4]}},
+        {"lane_id": 2, "node_connections": {"near": [1], "crossing": [4, 5]}}
+    ]
+}
 
-# 生成静态道路数据
-static_data = processor.create_static_road_data(
-    n_lanes=3,
-    lane_length=1000.0
-)
-processor.save_data(static_data, "static_road_data.csv", format='csv')
+with open("static_road_data.json", "w") as f:
+    json.dump(static_data, f, indent=2)
 
-# 生成动态交通数据
-dynamic_data = processor.create_dynamic_traffic_data(
-    static_data=static_data,
-    time_hours=24.0
-)
-processor.save_data(dynamic_data, "dynamic_traffic_data.csv", format='csv')
+# 创建动态交通数据（CSV格式）
+dynamic_data = pd.DataFrame([
+    {"lane_id": 0, "start_frame": 0.0, "avg_speed": 0.0, "avg_occupancy": 0.4, 
+     "total_vehicles": 0.26, "car_ratio": 1.0, "medium_ratio": 0.0, 
+     "heavy_ratio": 0.0, "motorcycle_ratio": 0.0, "crossing_ratio": -1.0, 
+     "direct_ratio": 0.0, "near_ratio": -1.0},
+    {"lane_id": 0, "start_frame": 10.0, "avg_speed": 0.03, "avg_occupancy": 0.4, 
+     "total_vehicles": 0.26, "car_ratio": 1.0, "medium_ratio": 0.0, 
+     "heavy_ratio": 0.0, "motorcycle_ratio": 0.0, "crossing_ratio": -1.0, 
+     "direct_ratio": 1.0, "near_ratio": -1.0}
+])
+
+dynamic_data.to_csv("dynamic_traffic_data.csv", index=False)
 ```
-
-### 3. 处理原始数据
-
-```python
-# 从原始数据生成分离的数据文件
-raw_data = pd.read_csv("raw_traffic_data.csv")
-
-# 提取静态道路数据
-static_data = processor.extract_static_data(raw_data)
-processor.save_data(static_data, "static_road_data.csv")
-
-# 提取动态交通数据
-dynamic_data = processor.extract_dynamic_data(raw_data)
-processor.save_data(dynamic_data, "dynamic_traffic_data.csv")
-```
-
-## 数据验证
-
-### 静态数据验证
-
-```python
-from spin.datasets.lane_data_utils import validate_static_data
-
-# 验证静态道路数据
-is_valid, errors = validate_static_data(static_data)
-if is_valid:
-    print("✅ 静态数据验证通过")
-else:
-    print(f"❌ 静态数据验证失败: {errors}")
-```
-
-验证项目：
-- 必需字段存在性检查
-- `spatial_id` 唯一性检查
-- `node_connections` 格式验证
-- 连接目标节点存在性验证
-
-### 动态数据验证
-
-```python
-from spin.datasets.lane_data_utils import validate_dynamic_data
-
-# 验证动态交通数据
-is_valid, errors = validate_dynamic_data(dynamic_data, static_data)
-if is_valid:
-    print("✅ 动态数据验证通过")
-else:
-    print(f"❌ 动态数据验证失败: {errors}")
-```
-
-验证项目：
-- 必需字段存在性检查
-- 时间戳格式验证
-- `spatial_id` 与静态数据一致性检查
-- 数值范围合理性检查
-- 缺失值统计
 
 ## 连接规则详解
 
@@ -226,47 +186,17 @@ else:
 | 类型 | 描述 | 图连接权重 | 使用场景 |
 |------|------|-----------|----------|
 | `direct` | 直通连接 | 1.0 | 同一车道内相邻节点 |
-| `dashed` | 虚线连接 | 0.5 | 允许变道的跨车道连接 |
-| `solid` | 实线连接 | 0.0 | 禁止变道的跨车道分隔 |
+| `near` | 相邻车道连接 | 根据变道概率 | 允许变道的跨车道连接 |
+| `crossing` | 交叉路口连接 | 0/0.5/1（动态） | 红绿灯控制的路口 |
 
-### 连接规则格式
+### 连接规则格式（JSON）
 
-**字符串格式（推荐）：**
-```
-"target1,type1;target2,type2;target3,type3"
-```
-
-**示例：**
-```
-"lane_0_0001,direct;lane_1_0000,dashed;lane_2_0032,dashed"
-```
-
-**字典格式：**
-```python
-{
-    "lane_0_0001": "direct",
-    "lane_1_0000": "dashed",
-    "lane_2_0032": "dashed"
-}
-```
-
-**JSON格式：**
 ```json
-{"lane_0_0001": "direct", "lane_1_0000": "dashed", "lane_2_0032": "dashed"}
-```
-
-## 性能优化
-
-### 内存优化
-
-```python
-# 使用预处理缓存
-dataset = LaneTrafficDataset(
-    static_data_path="static_road_data.csv",
-    dynamic_data_path="dynamic_traffic_data.csv",
-    use_cache=True,                    # 启用缓存
-    cache_dir="./cache"                # 缓存目录
-)
+{
+  "direct": [1, 2],
+  "near": [3, 4],
+  "crossing": [5, 6]
+}
 ```
 
 ## 配置文件示例
@@ -275,20 +205,23 @@ dataset = LaneTrafficDataset(
 # config/imputation/spin_lane.yaml
 dataset:
   name: lane_traffic
-  static_data_path: data/static_road_data.csv
+  static_data_path: data/static_road_data.json
   dynamic_data_path: data/dynamic_traffic_data.csv
   
-  # 数据列名配置
-  static_cols:
-    lane_id: 'lane_id'
-    spatial_id: 'spatial_id'
-    node_connections: 'node_connections'
-  
+  # 动态数据列名配置
   dynamic_cols:
-    timestamp: 'timestamp'
-    spatial_id: 'spatial_id'
-    speed: 'speed'
-    spacing: 'spacing'
+    lane_id: 'lane_id'
+    start_frame: 'start_frame'
+    avg_speed: 'avg_speed'
+    avg_occupancy: 'avg_occupancy'
+    total_vehicles: 'total_vehicles'
+    car_ratio: 'car_ratio'
+    medium_ratio: 'medium_ratio'
+    heavy_ratio: 'heavy_ratio'
+    motorcycle_ratio: 'motorcycle_ratio'
+    crossing_ratio: 'crossing_ratio'
+    direct_ratio: 'direct_ratio'
+    near_ratio: 'near_ratio'
   
   # 数据处理参数
   window_size: 12
@@ -297,6 +230,11 @@ dataset:
 ```
 
 ## 最佳实践
+
+### 1. 数据格式选择
+
+- **静态道路数据**：使用 JSON 格式，便于表示嵌套的连接关系
+- **动态交通数据**：使用 CSV 格式，便于大规模时序数据存储和处理
 
 ### 2. 数据更新
 
@@ -307,7 +245,7 @@ dataset:
 ### 3. 数据验证
 
 - 在加载数据前进行验证
-- 确保静态数据和动态数据的 `spatial_id` 一致
+- 确保静态数据和动态数据的 `lane_id` 一致
 - 检查连接规则的完整性和正确性
 
 ## 示例数据集
@@ -320,8 +258,8 @@ python examples/create_sample_data.py
 
 # 生成的文件
 data/
-  ├── static_road_data.csv      # 静态道路数据
-  └── dynamic_traffic_data.csv  # 动态交通数据
+  ├── static_road_data.json     # 静态道路数据（JSON格式）
+  └── dynamic_traffic_data.csv  # 动态交通数据（CSV格式）
 ```
 
 ## 总结
@@ -329,9 +267,7 @@ data/
 采用静态和动态数据分离的设计具有以下优势：
 
 ✅ **清晰的数据结构** - 静态和动态信息明确分离  
-✅ **高效的存储** - 避免静态信息的重复存储  
+✅ **高效的存储** - JSON存储拓扑结构，CSV存储时序数据  
 ✅ **便于维护** - 道路结构更新无需修改全部数据  
 ✅ **灵活性强** - 可以独立更新静态或动态数据  
 ✅ **性能优化** - 减少数据读取和内存占用
-
-

@@ -2,7 +2,7 @@
 
 ## 概述
 
-数据集现在支持用户自定义掩码，允许用户精确控制哪些时间戳下哪些spatial_id的值是已知的（已观测），哪些是未知的（需要预测）。
+数据集现在支持用户自定义掩码，允许用户精确控制哪些时间窗口下哪些lane_id的值是已知的（已观测），哪些是未知的（需要预测）。
 
 ## 核心概念
 
@@ -22,8 +22,8 @@ dataset = LaneTrafficDataset(
     static_data_path='data/static_road_data.csv',
     dynamic_data_path='data/dynamic_traffic_data.csv',
     mask_data_path='data/mask.csv',  # 指定掩码文件
-    time_col='timestamp',
-    spatial_id_col='spatial_id',
+    time_col='start_frame',
+    spatial_id_col='lane_id',
     speed_col='speed',
     spacing_col='spacing'
 )
@@ -35,21 +35,21 @@ dataset = LaneTrafficDataset(
 
 #### 2.1 CSV格式
 
-CSV格式是最灵活和直观的方式，适合精确控制每个时间戳、每个spatial_id的观测状态。
+CSV格式是最灵活和直观的方式，适合精确控制每个时间窗口、每个lane_id的观测状态。
 
 **文件结构：**
 
-| timestamp | spatial_id | is_observed |
+| start_frame | lane_id | is_observed |
 |-----------|------------|-------------|
-| 2024-01-01 00:00:00 | lane_0_0000 | True |
-| 2024-01-01 00:00:00 | lane_0_0001 | False |
-| 2024-01-01 00:00:10 | lane_0_0000 | True |
+| 0 | 1 | 1 |
+| 10 | 2 | 0 |
+| 20 | 1 | 1 |
 | ... | ... | ... |
 
 **必需列：**
-- `timestamp`: 时间戳（与动态数据中的时间列对应）
-- `spatial_id`: 空间ID（与动态数据中的空间ID列对应）
-- `is_observed`: 是否已观测（True=已知，False=未知）
+- `start_frame`: 各个时间窗口的起始时间（与动态数据中的时间列对应）
+- `lane_id`: 路段ID（与动态数据中的路段ID列对应）
+- `is_observed`: 是否已观测（1=已知，0=未知）
 
 **示例代码：**
 
@@ -58,17 +58,17 @@ import pandas as pd
 
 # 创建掩码数据
 mask_data = []
-timestamps = pd.date_range('2024-01-01 00:00:00', periods=30, freq='10S')
-spatial_ids = ['lane_0_0000', 'lane_0_0001', 'lane_1_0000', 'lane_1_0001']
+start_frames = range(0, 300, 10)  # 时间窗口起始帧：0, 10, 20, ...
+lane_ids = [1, 2, 3, 4]
 
-for timestamp in timestamps:
-    for spatial_id in spatial_ids:
-        # 只有lane_0_0000和lane_1_0000是已知的
-        is_observed = spatial_id in ['lane_0_0000', 'lane_1_0000']
+for start_frame in start_frames:
+    for lane_id in lane_ids:
+        # 只有lane_id为1和3的是已知的
+        is_observed = lane_id in [1, 3]
         mask_data.append({
-            'timestamp': timestamp,
-            'spatial_id': spatial_id,
-            'is_observed': is_observed
+            'start_frame': start_frame,
+            'lane_id': lane_id,
+            'is_observed': int(is_observed)
         })
 
 # 保存为CSV
@@ -152,21 +152,21 @@ with open('mask.pkl', 'wb') as f:
 
 ```python
 # 在特定时间段，某些传感器故障
-faulty_sensors = ['lane_1_0001', 'lane_2_0000']
-fault_start = pd.Timestamp('2024-01-01 10:00:00')
-fault_end = pd.Timestamp('2024-01-01 12:00:00')
+faulty_lanes = [2, 4]
+fault_start_frame = 100
+fault_end_frame = 200
 
 mask_data = []
-for timestamp in timestamps:
-    for spatial_id in all_spatial_ids:
+for start_frame in all_start_frames:
+    for lane_id in all_lane_ids:
         # 在故障时间段内，故障传感器的数据标记为未知
-        if fault_start <= timestamp <= fault_end and spatial_id in faulty_sensors:
-            is_observed = False
+        if fault_start_frame <= start_frame <= fault_end_frame and lane_id in faulty_lanes:
+            is_observed = 0
         else:
-            is_observed = True
+            is_observed = 1
         mask_data.append({
-            'timestamp': timestamp,
-            'spatial_id': spatial_id,
+            'start_frame': start_frame,
+            'lane_id': lane_id,
             'is_observed': is_observed
         })
 ```
@@ -176,30 +176,33 @@ for timestamp in timestamps:
 不同时间段的观测模式不同。
 
 ```python
+import numpy as np
+
 # 早高峰：主干道数据完整，支路数据稀疏
 # 平峰：所有道路数据稀疏
 # 晚高峰：主干道数据完整，支路数据稀疏
 
 mask_data = []
-for i, timestamp in enumerate(timestamps):
-    hour = timestamp.hour
+for start_frame in all_start_frames:
+    # 假设每帧代表1秒，计算小时
+    hour = (start_frame // 3600) % 24
     
-    for spatial_id in all_spatial_ids:
-        is_main_road = spatial_id.startswith('lane_0')
+    for lane_id in all_lane_ids:
+        is_main_road = lane_id <= 2  # 假设lane_id 1,2是主干道
         
         # 早高峰 (7-9点) 和晚高峰 (17-19点)
         if hour in [7, 8, 17, 18]:
             if is_main_road:
-                is_observed = True  # 主干道数据完整
+                is_observed = 1  # 主干道数据完整
             else:
-                is_observed = np.random.rand() < 0.3  # 支路数据稀疏
+                is_observed = 1 if np.random.rand() < 0.3 else 0  # 支路数据稀疏
         else:
             # 平峰
-            is_observed = np.random.rand() < 0.5  # 所有道路数据稀疏
+            is_observed = 1 if np.random.rand() < 0.5 else 0  # 所有道路数据稀疏
         
         mask_data.append({
-            'timestamp': timestamp,
-            'spatial_id': spatial_id,
+            'start_frame': start_frame,
+            'lane_id': lane_id,
             'is_observed': is_observed
         })
 ```
@@ -230,10 +233,10 @@ print(f"第{time_idx}个时间步的已观测节点数: {dataset.training_mask[t
 
 ## 注意事项
 
-1. **时间戳对齐**：CSV掩码文件中的时间戳必须与动态数据中的时间戳对齐
-2. **空间ID对齐**：CSV掩码文件中的spatial_id必须在静态数据中存在
+1. **时间窗口对齐**：CSV掩码文件中的start_frame必须与动态数据中的时间窗口起始帧对齐
+2. **路段ID对齐**：CSV掩码文件中的lane_id必须在静态数据中存在
 3. **形状匹配**：NPZ和PKL格式的掩码矩阵形状必须与数据矩阵形状匹配
-4. **默认行为**：CSV格式中，如果某个(timestamp, spatial_id)组合未在掩码文件中出现，默认标记为未观测（False）
+4. **默认行为**：CSV格式中，如果某个(start_frame, lane_id)组合未在掩码文件中出现，默认标记为未观测（0）
 5. **特征共享**：对于二维掩码，所有特征（speed, spacing等）共享相同的掩码；对于三维掩码，可以为不同特征设置不同的掩码
 
 ## 完整示例
@@ -242,15 +245,15 @@ print(f"第{time_idx}个时间步的已观测节点数: {dataset.training_mask[t
 
 ## 常见问题
 
-**Q: 如果我只想指定部分时间戳的掩码怎么办？**
+**Q: 如果我只想指定部分时间窗口的掩码怎么办？**
 
-A: 在CSV格式中，未指定的(timestamp, spatial_id)组合将默认标记为未观测。如果需要默认标记为已观测，需要在CSV中显式列出所有组合。
+A: 在CSV格式中，未指定的(start_frame, lane_id)组合将默认标记为未观测。如果需要默认标记为已观测，需要在CSV中显式列出所有组合。
 
 **Q: NPZ格式的掩码索引顺序是什么？**
 
 A: 掩码的索引顺序与数据集的顺序一致：
-- 第1维（行）：时间，按 `dataset.timestamps` 的顺序
-- 第2维（列）：空间，按 `dataset.spatial_ids` 的顺序
+- 第1维（行）：时间，按 `dataset.start_frames` 的顺序
+- 第2维（列）：空间，按 `dataset.lane_ids` 的顺序
 - 第3维：特征，按 [speed, spacing] 的顺序
 
 **Q: 可以为不同特征设置不同的掩码吗？**
@@ -260,5 +263,4 @@ A: 可以。使用三维掩码 `[n_times, n_spaces, n_features]` 即可为每个
 **Q: 掩码文件可以包含额外的列吗？**
 
 A: CSV格式可以包含额外的列，只要包含必需的三列即可。NPZ和PKL格式也可以包含额外的数组或键，但只会使用 `'mask'` 或 `'training_mask'`。
-
 
