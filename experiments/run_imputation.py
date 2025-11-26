@@ -29,7 +29,7 @@ from spin.baselines import SAITS, TransformerModel, BRITS
 from spin.imputers import SPINImputer, SAITSImputer, BRITSImputer
 from spin.models import SPINModel, SPINHierarchicalModel
 from spin.scheduler import CosineSchedulerWithRestarts
-#from spin.datasets.lane_traffic_dataset import LaneTrafficDataset
+from spin.datasets.lane_traffic_dataset import LaneTrafficDataset
 
 
 def get_model_classes(model_str):
@@ -50,13 +50,30 @@ def get_model_classes(model_str):
     return model, filler
 
 
-def get_dataset(dataset_name: str, data_path: str = None):
+def get_dataset(dataset_name: str, data_path: str = None, 
+                static_data_path: str = None, mask_data_path: str = None,
+                feature_cols: list = None):
+    """
+    获取数据集
+    
+    Args:
+        dataset_name: 数据集名称
+        data_path: 动态交通数据路径 (用于lane数据集)
+        static_data_path: 静态道路数据路径 (用于lane数据集)
+        mask_data_path: 掩码文件路径 (用于lane数据集)
+        feature_cols: 特征列名列表 (用于lane数据集)
+    """
     # 支持车道级交通数据集
-    # if dataset_name.startswith('lane'):
-    #    if data_path is None:
-    #        # 使用默认的示例数据路径
-    #        data_path = "sample_lane_data.csv"
-    #    return LaneTrafficDataset(data_path=data_path, impute_nans=True)
+    if dataset_name == 'lane':
+        if static_data_path is None or data_path is None:
+            raise ValueError("lane数据集需要指定 --static-data-path 和 --data-path")
+        return LaneTrafficDataset(
+            static_data_path=static_data_path,
+            dynamic_data_path=data_path,
+            mask_data_path=mask_data_path,
+            feature_cols=feature_cols,
+            impute_nans=True
+        )
     
     if dataset_name.startswith('air'):
         return AirQuality(impute_nans=True, small=dataset_name[3:] == '36')
@@ -135,7 +152,13 @@ def parse_args():
     parser.add_argument("--model-name", type=str, default='spin')
     parser.add_argument("--dataset-name", type=str, default='air36')
     parser.add_argument("--data-path", type=str, default=None, 
-                       help="Path to custom dataset file (for lane datasets)")
+                       help="Path to dynamic traffic data file (csv)")
+    parser.add_argument("--static-data-path", type=str, default=None,
+                       help="Path to static road data file (graph.json)")
+    parser.add_argument("--mask-data-path", type=str, default=None,
+                       help="Path to mask data file (csv)")
+    parser.add_argument("--feature-cols", type=str, default=None,
+                       help="Comma-separated feature column names")
     parser.add_argument("--config", type=str, default='imputation/spin.yaml')
 
     # Splitting/aggregation params
@@ -213,7 +236,19 @@ def run_experiment(args):
     is_spin = args.model_name in ['spin', 'spin_h']
 
     model_cls, imputer_class = get_model_classes(args.model_name)
-    dataset = get_dataset(args.dataset_name, args.data_path)
+    
+    # 解析特征列
+    feature_cols = None
+    if args.feature_cols:
+        feature_cols = [col.strip() for col in args.feature_cols.split(',')]
+    
+    dataset = get_dataset(
+        args.dataset_name, 
+        args.data_path,
+        static_data_path=args.static_data_path,
+        mask_data_path=args.mask_data_path,
+        feature_cols=feature_cols
+    )
 
     logger.info(args)
 
