@@ -272,7 +272,7 @@ def run_experiment(args):
 
     # time embedding
     if is_spin or args.model_name == 'transformer':
-        time_emb = dataset.datetime_encoded(['day', 'week']).values
+        time_emb = dataset.datetime_encoded([]).values
         exog_map = {'global_temporal_encoding': time_emb}
 
         input_map = {
@@ -286,22 +286,27 @@ def run_experiment(args):
         adj = dataset.get_connectivity(threshold=args.adj_threshold,
                                        include_self=False,
                                        force_symmetric=is_spin)
+        # 将邻接矩阵转换为 edge_index 格式 (2, num_edges)
+        from tsl.ops.connectivity import adj_to_edge_index
+        edge_index, edge_weight = adj_to_edge_index(adj)
+        connectivity = (edge_index, edge_weight)
     else:
-        adj = None
+        connectivity = None
 
     # instantiate dataset
-    torch_dataset = ImputationDataset(*dataset.numpy(return_idx=True),
+    data, index, node_ids = dataset.numpy(return_idx=True)
+    torch_dataset = ImputationDataset(data=data,
+                                      index=index,
                                       training_mask=dataset.training_mask,
                                       eval_mask=dataset.eval_mask,
-                                      connectivity=adj,
+                                      connectivity=connectivity,
                                       exogenous=exog_map,
                                       input_map=input_map,
                                       window=args.window,
                                       stride=args.stride)
 
     # get train/val/test indices
-    splitter = dataset.get_splitter(val_len=args.val_len,
-                                    test_len=args.test_len)
+    splitter = dataset.get_splitter(args.val_len, args.test_len)
 
     scalers = {'data': StandardScaler(axis=(0, 1))}
 
@@ -317,7 +322,7 @@ def run_experiment(args):
 
     additional_model_hparams = dict(n_nodes=dm.n_nodes,
                                     input_size=dm.n_channels,
-                                    u_size=4,
+                                    u_size=1,
                                     output_size=dm.n_channels,
                                     window_size=dm.window)
 
@@ -360,7 +365,8 @@ def run_experiment(args):
 
     # callbacks
     early_stop_callback = EarlyStopping(monitor='val_mae',
-                                        patience=args.patience, mode='min')
+                                        patience=args.patience, mode='min',
+                                        check_on_train_epoch_end=False)
     checkpoint_callback = ModelCheckpoint(dirpath=logdir, save_top_k=1,
                                           monitor='val_mae', mode='min')
 
@@ -390,6 +396,8 @@ def run_experiment(args):
                              devices=1,
                              gradient_clip_val=args.grad_clip_val,
                              limit_train_batches=args.batches_epoch * args.split_batch_in,
+                             check_val_every_n_epoch=1,
+                             log_every_n_steps=1,
                              callbacks=[early_stop_callback, checkpoint_callback])
         check_shared_storage(imputer)
         print("Checking shared storage...done!!!!!!!")

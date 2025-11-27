@@ -89,7 +89,9 @@ class SPINModel(nn.Module):
         # only taking into account valid data in representation set.          #
 
         # Replace H in missing entries with queries Q - 确保不共享内存
-        h = torch.where(mask.bool(), h, q.clone().detach())
+        # mask 需要在最后一维取任意通道（因为所有通道共享同一mask）
+        mask_expanded = mask[..., :1].expand_as(h)
+        h = torch.where(mask_expanded.bool(), h, q.clone().detach())
         # Normalize features
         h = self.h_norm(h)
 
@@ -101,11 +103,11 @@ class SPINModel(nn.Module):
                 # valid values from masked ones
                 valid = self.valid_emb(token_index=node_index)
                 masked = self.mask_emb(token_index=node_index)
-                h = torch.where(mask.bool(), h + valid, h + masked.clone().detach())
+                h = torch.where(mask_expanded.bool(), h + valid, h + masked.clone().detach())
             # Masked Temporal GAT for encoding representation
-            skip_connection = self.x_skip[l](x_masked) * mask
+            skip_connection = self.x_skip[l](x_masked) * mask_expanded
             h = h + skip_connection.clone().detach()  # skip connection for valid x
-            h = self.encoder[l](h, edge_index, mask=mask)
+            h = self.encoder[l](h, edge_index, mask=mask_expanded)
             # Read from H to get imputations
             target_readout = self.readout[l](h[..., target_nodes, :])
             imputations.append(target_readout)

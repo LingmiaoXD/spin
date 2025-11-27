@@ -44,7 +44,7 @@ class LaneTrafficDataset(Dataset):
                  mask_time_col: str = 'start_frame',
                  mask_lane_col: str = 'lane_id',
                  mask_value_col: str = 'is_observed',
-                 window_size: int = 12,
+                 window_size: int = 10,
                  stride: int = 1,
                  val_len: float = 0.1,
                  test_len: float = 0.2,
@@ -323,14 +323,14 @@ class LaneTrafficDataset(Dataset):
         """获取图连接矩阵"""
         adj = self.adjacency.copy()
         
-        # 应用阈值
-        adj[adj < threshold] = 0
+        # 应用阈值，转为二值矩阵
+        adj = (adj >= threshold).astype(np.uint8)
         
         if not include_self:
             np.fill_diagonal(adj, 0)
             
         if force_symmetric:
-            adj = (adj + adj.T) / 2
+            adj = np.maximum(adj, adj.T)
             
         return adj
         
@@ -341,27 +341,22 @@ class LaneTrafficDataset(Dataset):
         return self.data
         
     def datetime_encoded(self, encoding: List[str]) -> pd.DataFrame:
-        """获取时间编码"""
-        # 对于 start_frame 格式的时间，创建简单的周期编码
+        """获取时间编码 - 适用于短时间尺度连续数据"""
         n_times = len(self.timestamps)
-        df = pd.DataFrame({'frame': self.timestamps})
+        df = pd.DataFrame(index=range(n_times))
         
-        if 'day' in encoding:
-            # 假设每天有固定数量的帧，这里简化处理
-            frames_per_day = 24 * 6  # 假设每10分钟一帧，每天144帧
-            df['day'] = (df['frame'] // frames_per_day) % 7
-        if 'week' in encoding:
-            frames_per_week = 24 * 6 * 7
-            df['week'] = (df['frame'] // frames_per_week) % 52
-        if 'hour' in encoding:
-            frames_per_hour = 6  # 假设每10分钟一帧
-            df['hour'] = (df['frame'] // frames_per_hour) % 24
-            
+        # 归一化时间位置 [0, 1]
+        t_min, t_max = self.timestamps.min(), self.timestamps.max()
+        normalized_t = (self.timestamps - t_min) / (t_max - t_min + 1e-8)
+        
+        # 线性时间位置
+        df['time_linear'] = normalized_t
+        
         return df
         
     def get_splitter(self, val_len: float = None, test_len: float = None):
         """获取数据分割器"""
-        from tsl.data.splitter import TemporalSplitter
+        from tsl.data.datamodule.splitters import TemporalSplitter
         
         val_len = val_len or self.val_len
         test_len = test_len or self.test_len
