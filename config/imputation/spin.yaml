@@ -1,21 +1,30 @@
 ##########################        SPIN CONFIG        ##########################
 
 #### Dataset params ###########################################################
-#dataset_name: [la_point, bay_point, la_bock, bay_bock, air, air36]
+#dataset_name: [la_point, bay_point, la_bock, bay_bock, air, air36, lane]
 val_len: 0.1
 
-window: 12  # [12, 24, 36]
+window: 10
 stride: 1
+
+# 多组数据配置
+data_groups:
+  - static: ./data/graph.json
+    dynamic: ./data/d210240830_lane_node_stats.csv
+    mask: ./data/d210240830_lane_mask.csv
+  - static: ./data/graph.json
+    dynamic: ./data/d210240900_lane_node_stats.csv
+    mask: ./data/d210240900_lane_mask.csv
 
 #### Training params ##########################################################
 whiten_prob: [0.2, 0.5, 0.8]
 scale_target: True
 
-epochs: 300
+epochs: 80
 loss_fn: l1_loss
 lr_scheduler: magic
 lr: 0.0008
-patience: 40
+patience: 5
 precision: 16
 batch_size: 4
 split_batch_in: 2

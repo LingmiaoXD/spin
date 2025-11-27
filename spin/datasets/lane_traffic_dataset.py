@@ -25,6 +25,10 @@ class LaneTrafficDataset(Dataset):
     - 静态数据(graph.json): 包含 lane_id 和 node_connections
     - 动态数据(csv): 包含 lane_id, start_frame, avg_speed, avg_occupancy 等特征
     - 掩码数据(csv): 包含 start_frame, lane_id, is_observed
+    
+    支持两种输入方式：
+    1. 单组数据：直接传入 static_data_path, dynamic_data_path, mask_data_path
+    2. 多组数据：传入 data_groups 列表，每组包含 static, dynamic, mask 路径
     """
     
     # 默认特征列（可配置）
@@ -35,9 +39,10 @@ class LaneTrafficDataset(Dataset):
     ]
     
     def __init__(self, 
-                 static_data_path: str,
-                 dynamic_data_path: str,
+                 static_data_path: Optional[str] = None,
+                 dynamic_data_path: Optional[str] = None,
                  mask_data_path: Optional[str] = None,
+                 data_groups: Optional[List[Dict[str, str]]] = None,
                  feature_cols: Optional[List[str]] = None,
                  time_col: str = 'start_frame',
                  lane_id_col: str = 'lane_id',
@@ -55,9 +60,11 @@ class LaneTrafficDataset(Dataset):
         初始化车道级交通数据集
         
         Args:
-            static_data_path: 静态道路数据文件路径(graph.json)
-            dynamic_data_path: 动态交通数据文件路径(csv)
+            static_data_path: 静态道路数据文件路径(graph.json)，单组数据时使用
+            dynamic_data_path: 动态交通数据文件路径(csv)，单组数据时使用
             mask_data_path: 用户自定义掩码文件路径(csv)，可选
+            data_groups: 多组数据配置列表，每组格式为:
+                         [{"static": "path1.json", "dynamic": "path1.csv", "mask": "mask1.csv"}, ...]
             feature_cols: 要使用的特征列名列表，默认使用所有数值特征
             time_col: 动态数据中的时间列名
             lane_id_col: 车道ID列名
@@ -73,9 +80,18 @@ class LaneTrafficDataset(Dataset):
         """
         super().__init__(**kwargs)
         
-        self.static_data_path = static_data_path
-        self.dynamic_data_path = dynamic_data_path
-        self.mask_data_path = mask_data_path
+        # 处理数据路径：支持单组或多组
+        if data_groups is not None:
+            self.data_groups = data_groups
+        elif static_data_path is not None and dynamic_data_path is not None:
+            self.data_groups = [{
+                'static': static_data_path,
+                'dynamic': dynamic_data_path,
+                'mask': mask_data_path
+            }]
+        else:
+            raise ValueError("必须提供 data_groups 或 (static_data_path + dynamic_data_path)")
+        
         self.feature_cols = feature_cols or self.DEFAULT_FEATURE_COLS
         self.time_col = time_col
         self.lane_id_col = lane_id_col
@@ -94,37 +110,52 @@ class LaneTrafficDataset(Dataset):
         self._preprocess_data()
         
     def _load_data(self):
-        """加载静态道路数据和动态交通数据"""
-        # 1. 加载静态道路数据 (graph.json)
-        static_path = Path(self.static_data_path)
-        if static_path.suffix == '.json':
-            with open(static_path, 'r', encoding='utf-8') as f:
-                static_data = json.load(f)
-            if 'nodes' in static_data:
-                self.static_nodes = static_data['nodes']
+        """加载静态道路数据和动态交通数据（支持多组）"""
+        self.static_nodes = []
+        self.dynamic_df = pd.DataFrame()
+        self.mask_data_paths = []  # 保存所有mask路径供后续使用
+        
+        for i, group in enumerate(self.data_groups):
+            print(f"\n📂 加载第 {i+1}/{len(self.data_groups)} 组数据...")
+            
+            # 1. 加载静态道路数据 (graph.json)
+            static_path = Path(group['static'])
+            if static_path.suffix == '.json':
+                with open(static_path, 'r', encoding='utf-8') as f:
+                    static_data = json.load(f)
+                if 'nodes' in static_data:
+                    nodes = static_data['nodes']
+                else:
+                    nodes = static_data
+                self.static_nodes.extend(nodes)
+                print(f"   ✅ 静态数据: {len(nodes)} 个节点")
             else:
-                self.static_nodes = static_data
-        else:
-            raise ValueError(f"静态数据文件应为JSON格式: {static_path.suffix}")
+                raise ValueError(f"静态数据文件应为JSON格式: {static_path.suffix}")
             
-        print(f"✅ 加载静态道路数据: {len(self.static_nodes)} 个节点")
-        
-        # 2. 加载动态交通数据 (csv)
-        dynamic_path = Path(self.dynamic_data_path)
-        if dynamic_path.suffix == '.csv':
-            self.dynamic_df = pd.read_csv(dynamic_path)
-        else:
-            raise ValueError(f"动态数据文件应为CSV格式: {dynamic_path.suffix}")
+            # 2. 加载动态交通数据 (csv)
+            dynamic_path = Path(group['dynamic'])
+            if dynamic_path.suffix == '.csv':
+                df = pd.read_csv(dynamic_path)
+                self.dynamic_df = pd.concat([self.dynamic_df, df], ignore_index=True)
+                print(f"   ✅ 动态数据: {df.shape[0]} 条记录")
+            else:
+                raise ValueError(f"动态数据文件应为CSV格式: {dynamic_path.suffix}")
             
-        print(f"✅ 加载动态交通数据: {self.dynamic_df.shape[0]} 条记录")
+            # 3. 保存mask路径
+            mask_path = group.get('mask')
+            self.mask_data_paths.append(mask_path)
         
-        # 3. 验证数据一致性
+        print(f"\n📊 合并后总计:")
+        print(f"   静态节点: {len(self.static_nodes)} 个")
+        print(f"   动态记录: {self.dynamic_df.shape[0]} 条")
+        
+        # 4. 验证数据一致性
         static_lane_ids = set(node[self.lane_id_col] for node in self.static_nodes)
         dynamic_lane_ids = set(self.dynamic_df[self.lane_id_col])
         
         if not dynamic_lane_ids.issubset(static_lane_ids):
             missing = dynamic_lane_ids - static_lane_ids
-            print(f"⚠️ 警告: 动态数据中有 {len(missing)} 个 lane_id 在静态数据中不存在: {missing}")
+            print(f"⚠️ 警告: 动态数据中有 {len(missing)} 个 lane_id 在静态数据中不存在")
         
         print(f"✅ 数据一致性验证通过")
         
@@ -253,11 +284,14 @@ class LaneTrafficDataset(Dataset):
         print(f"连接数: {np.sum(adj_matrix > 0) // 2}")
         
     def _create_masks(self):
-        """创建训练/评估掩码"""
+        """创建训练/评估掩码（支持多组mask文件）"""
         n_times, n_lanes, n_features = self.data.shape
         
-        if self.mask_data_path is not None:
-            self._load_user_mask()
+        # 检查是否有任何mask文件
+        has_masks = any(p is not None for p in self.mask_data_paths)
+        
+        if has_masks:
+            self._load_user_masks()
             print(f"✅ 使用用户自定义掩码")
             print(f"   已观测数据比例: {self.training_mask.mean():.3f}")
             print(f"   未观测数据比例: {self.eval_mask.mean():.3f}")
@@ -277,22 +311,9 @@ class LaneTrafficDataset(Dataset):
             eval_mask_flat[eval_indices] = True
             print(f"✅ 使用随机生成的掩码")
             
-    def _load_user_mask(self):
-        """从用户提供的CSV文件加载掩码数据"""
+    def _load_user_masks(self):
+        """从用户提供的多个CSV文件加载掩码数据"""
         n_times, n_lanes, n_features = self.data.shape
-        mask_path = Path(self.mask_data_path)
-        
-        if not mask_path.exists():
-            raise ValueError(f"掩码文件不存在: {self.mask_data_path}")
-        
-        # 加载CSV掩码
-        mask_df = pd.read_csv(mask_path)
-        
-        # 检查必需列
-        required_cols = [self.mask_time_col, self.mask_lane_col, self.mask_value_col]
-        missing_cols = [col for col in required_cols if col not in mask_df.columns]
-        if missing_cols:
-            raise ValueError(f"掩码文件缺少必需列: {missing_cols}")
         
         # 初始化掩码矩阵（默认所有位置都是未观测的）
         self.training_mask = np.zeros((n_times, n_lanes, n_features), dtype=bool)
@@ -301,18 +322,37 @@ class LaneTrafficDataset(Dataset):
         lane_id_to_idx = {lid: idx for idx, lid in enumerate(self.lane_ids)}
         time_to_idx = {t: idx for idx, t in enumerate(self.timestamps)}
         
-        # 填充掩码
-        for _, row in mask_df.iterrows():
-            time_val = row[self.mask_time_col]
-            lane_id = row[self.mask_lane_col]
-            is_observed = bool(row[self.mask_value_col])
+        # 加载所有mask文件
+        for i, mask_path in enumerate(self.mask_data_paths):
+            if mask_path is None:
+                continue
+                
+            mask_path = Path(mask_path)
+            if not mask_path.exists():
+                print(f"⚠️ 警告: 掩码文件不存在，跳过: {mask_path}")
+                continue
             
-            time_idx = time_to_idx.get(time_val)
-            lane_idx = lane_id_to_idx.get(lane_id)
+            print(f"   加载掩码文件 {i+1}: {mask_path}")
+            mask_df = pd.read_csv(mask_path)
             
-            if time_idx is not None and lane_idx is not None:
-                # 对所有特征都使用相同的掩码
-                self.training_mask[time_idx, lane_idx, :] = is_observed
+            # 检查必需列
+            required_cols = [self.mask_time_col, self.mask_lane_col, self.mask_value_col]
+            missing_cols = [col for col in required_cols if col not in mask_df.columns]
+            if missing_cols:
+                raise ValueError(f"掩码文件 {mask_path} 缺少必需列: {missing_cols}")
+            
+            # 填充掩码
+            for _, row in mask_df.iterrows():
+                time_val = row[self.mask_time_col]
+                lane_id = row[self.mask_lane_col]
+                is_observed = bool(row[self.mask_value_col])
+                
+                time_idx = time_to_idx.get(time_val)
+                lane_idx = lane_id_to_idx.get(lane_id)
+                
+                if time_idx is not None and lane_idx is not None:
+                    # 对所有特征都使用相同的掩码
+                    self.training_mask[time_idx, lane_idx, :] = is_observed
         
         # 评估掩码是训练掩码的反
         self.eval_mask = ~self.training_mask

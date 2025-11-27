@@ -52,28 +52,38 @@ def get_model_classes(model_str):
 
 def get_dataset(dataset_name: str, data_path: str = None, 
                 static_data_path: str = None, mask_data_path: str = None,
-                feature_cols: list = None):
+                feature_cols: list = None, data_groups: list = None):
     """
     获取数据集
     
     Args:
         dataset_name: 数据集名称
-        data_path: 动态交通数据路径 (用于lane数据集)
-        static_data_path: 静态道路数据路径 (用于lane数据集)
-        mask_data_path: 掩码文件路径 (用于lane数据集)
+        data_path: 动态交通数据路径 (用于lane数据集，单组模式)
+        static_data_path: 静态道路数据路径 (用于lane数据集，单组模式)
+        mask_data_path: 掩码文件路径 (用于lane数据集，单组模式)
         feature_cols: 特征列名列表 (用于lane数据集)
+        data_groups: 多组数据配置列表 (用于lane数据集，多组模式)
     """
     # 支持车道级交通数据集
     if dataset_name == 'lane':
-        if static_data_path is None or data_path is None:
-            raise ValueError("lane数据集需要指定 --static-data-path 和 --data-path")
-        return LaneTrafficDataset(
-            static_data_path=static_data_path,
-            dynamic_data_path=data_path,
-            mask_data_path=mask_data_path,
-            feature_cols=feature_cols,
-            impute_nans=True
-        )
+        if data_groups is not None:
+            # 多组数据模式
+            return LaneTrafficDataset(
+                data_groups=data_groups,
+                feature_cols=feature_cols,
+                impute_nans=True
+            )
+        elif static_data_path is not None and data_path is not None:
+            # 单组数据模式（向后兼容）
+            return LaneTrafficDataset(
+                static_data_path=static_data_path,
+                dynamic_data_path=data_path,
+                mask_data_path=mask_data_path,
+                feature_cols=feature_cols,
+                impute_nans=True
+            )
+        else:
+            raise ValueError("lane数据集需要指定 data_groups 或 (--static-data-path + --data-path)")
     
     if dataset_name.startswith('air'):
         return AirQuality(impute_nans=True, small=dataset_name[3:] == '36')
@@ -242,12 +252,16 @@ def run_experiment(args):
     if args.feature_cols:
         feature_cols = [col.strip() for col in args.feature_cols.split(',')]
     
+    # 获取 data_groups 配置（如果有）
+    data_groups = getattr(args, 'data_groups', None)
+    
     dataset = get_dataset(
         args.dataset_name, 
         args.data_path,
         static_data_path=args.static_data_path,
         mask_data_path=args.mask_data_path,
-        feature_cols=feature_cols
+        feature_cols=feature_cols,
+        data_groups=data_groups
     )
 
     logger.info(args)
