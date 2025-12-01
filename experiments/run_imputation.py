@@ -236,6 +236,8 @@ def run_experiment(args):
         torch.cuda.empty_cache()
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
+        # 设置Tensor Cores精度以提升性能
+        torch.set_float32_matmul_precision('medium')
     
     # 设置环境变量以避免内存共享问题
     
@@ -472,9 +474,17 @@ def run_experiment(args):
         mask_list.append(batch_output['mask'].detach().cpu())
     
     # 拼接所有批次
-    y_hat = torch.cat(y_hat_list, dim=0).numpy().squeeze(-1)
-    y_true = torch.cat(y_list, dim=0).numpy().squeeze(-1)
-    mask = torch.cat(mask_list, dim=0).numpy().squeeze(-1)
+    y_hat = torch.cat(y_hat_list, dim=0).numpy()
+    y_true = torch.cat(y_list, dim=0).numpy()
+    mask = torch.cat(mask_list, dim=0).numpy()
+    
+    # 只在最后一个维度大小为1时才squeeze
+    if y_hat.shape[-1] == 1:
+        y_hat = y_hat.squeeze(-1)
+    if y_true.shape[-1] == 1:
+        y_true = y_true.squeeze(-1)
+    if mask.shape[-1] == 1:
+        mask = mask.squeeze(-1)
     
     check_mae = numpy_metrics.masked_mae(y_hat, y_true, mask)
     print(f'Test MAE: {check_mae:.2f}')

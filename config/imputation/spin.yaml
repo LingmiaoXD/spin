@@ -1,7 +1,7 @@
 ##########################        SPIN CONFIG        ##########################
 
 #### Dataset params ###########################################################
-#dataset_name: [la_point, bay_point, la_bock, bay_bock, air, air36, lane]
+dataset_name: [la_point, bay_point, la_bock, bay_bock, air, air36, lane]
 val_len: 0.1
 
 window: 10
@@ -13,8 +13,11 @@ data_groups:
     dynamic: ./data/d210240830_lane_node_stats.csv
     mask: ./data/d210240830_lane_mask.csv
   - static: ./data/graph.json
-    dynamic: ./data/d210240900_lane_node_stats.csv
-    mask: ./data/d210240900_lane_mask.csv
+    dynamic: ./data/d210240900_merged_lane_node_stats.csv
+    mask: ./data/d210240900_merged_lane_mask.csv
+  - static: ./data/graph.json
+    dynamic: ./data/d210240930_merged_lane_node_stats.csv
+    mask: ./data/d210240930_merged_lane_mask.csv
 
 #### Training params ##########################################################
 whiten_prob: [0.2, 0.5, 0.8]
