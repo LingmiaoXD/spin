@@ -223,7 +223,8 @@ def update_test_eval_mask(dm, dataset, p_fault, p_noise, seed=None):
 
 
 def save_imputed_results_lane(y_hat, dataset, dm, output_path, 
-                              train_indices=None, val_indices=None, test_indices=None):
+                              train_indices=None, val_indices=None, test_indices=None,
+                              mask_data_path=None):
     """
     将填充结果保存为与输入文件相同格式的CSV文件（用于lane数据集）
     
@@ -235,6 +236,7 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
         train_indices: 训练集的索引
         val_indices: 验证集的索引
         test_indices: 测试集的索引
+        mask_data_path: 掩码文件路径（可选，用于提取完整的时间和节点列表）
     """
     # 获取数据集的元信息
     timestamps = dataset.timestamps
@@ -242,6 +244,58 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
     feature_cols = dataset.feature_cols
     time_col = dataset.time_col
     lane_id_col = dataset.lane_id_col
+    mask_time_col = dataset.mask_time_col
+    mask_lane_col = dataset.mask_lane_col
+    
+    # 如果提供了mask文件路径，尝试从mask文件中提取完整的时间和节点列表
+    if mask_data_path is not None and os.path.exists(mask_data_path):
+        print(f"从mask文件中提取完整的时间和节点列表: {mask_data_path}")
+        try:
+            mask_df = pd.read_csv(mask_data_path)
+            if mask_time_col in mask_df.columns and mask_lane_col in mask_df.columns:
+                # 从mask文件中提取所有唯一的时间和节点
+                mask_timestamps = np.sort(mask_df[mask_time_col].unique())
+                mask_lane_ids = np.sort(mask_df[mask_lane_col].unique())
+                
+                # 合并dataset和mask中的时间和节点（取并集）
+                all_timestamps = np.sort(np.unique(np.concatenate([timestamps, mask_timestamps])))
+                all_lane_ids = np.sort(np.unique(np.concatenate([lane_ids, mask_lane_ids])))
+                
+                print(f"   dataset中的时间数: {len(timestamps)}, 节点数: {len(lane_ids)}")
+                print(f"   mask文件中的时间数: {len(mask_timestamps)}, 节点数: {len(mask_lane_ids)}")
+                print(f"   合并后的时间数: {len(all_timestamps)}, 节点数: {len(all_lane_ids)}")
+                
+                # 使用完整列表
+                timestamps = all_timestamps
+                lane_ids = all_lane_ids
+            else:
+                print(f"⚠️ 警告: mask文件缺少必需列 {mask_time_col} 或 {mask_lane_col}，使用dataset中的时间和节点列表")
+        except Exception as e:
+            print(f"⚠️ 警告: 无法从mask文件提取完整列表: {e}，使用dataset中的时间和节点列表")
+    elif hasattr(dataset, 'mask_data_paths') and dataset.mask_data_paths:
+        # 尝试从dataset的mask_data_paths中加载
+        for mask_path in dataset.mask_data_paths:
+            if mask_path is not None and os.path.exists(mask_path):
+                print(f"从dataset的mask文件中提取完整的时间和节点列表: {mask_path}")
+                try:
+                    mask_df = pd.read_csv(mask_path)
+                    if mask_time_col in mask_df.columns and mask_lane_col in mask_df.columns:
+                        mask_timestamps = np.sort(mask_df[mask_time_col].unique())
+                        mask_lane_ids = np.sort(mask_df[mask_lane_col].unique())
+                        
+                        all_timestamps = np.sort(np.unique(np.concatenate([timestamps, mask_timestamps])))
+                        all_lane_ids = np.sort(np.unique(np.concatenate([lane_ids, mask_lane_ids])))
+                        
+                        print(f"   dataset中的时间数: {len(timestamps)}, 节点数: {len(lane_ids)}")
+                        print(f"   mask文件中的时间数: {len(mask_timestamps)}, 节点数: {len(mask_lane_ids)}")
+                        print(f"   合并后的时间数: {len(all_timestamps)}, 节点数: {len(all_lane_ids)}")
+                        
+                        timestamps = all_timestamps
+                        lane_ids = all_lane_ids
+                        break
+                except Exception as e:
+                    print(f"⚠️ 警告: 无法从mask文件 {mask_path} 提取完整列表: {e}")
+                    continue
     
     # 处理y_hat的形状
     original_shape = y_hat.shape
@@ -287,9 +341,82 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
     window = dm.torch_dataset.window
     
     # 构建完整的时间序列数据
-    # 初始化完整数据矩阵（使用原始数据作为基础）
-    full_data = dataset.data.copy()  # [time, nodes, features]
-    training_mask = dataset.training_mask.copy()  # [time, nodes, features]
+    # 由于timestamps和lane_ids可能已经扩展（从mask文件），需要扩展数据矩阵
+    original_timestamps = dataset.timestamps
+    original_lane_ids = dataset.lane_ids
+    
+    # 创建原始索引映射
+    original_time_to_idx = {t: idx for idx, t in enumerate(original_timestamps)}
+    original_lane_to_idx = {lid: idx for idx, lid in enumerate(original_lane_ids)}
+    
+    # 创建新索引映射
+    new_time_to_idx = {t: idx for idx, t in enumerate(timestamps)}
+    new_lane_to_idx = {lid: idx for idx, lid in enumerate(lane_ids)}
+    
+    # 如果时间和节点列表已扩展，需要扩展数据矩阵
+    if len(timestamps) > len(original_timestamps) or len(lane_ids) > len(original_lane_ids):
+        print(f"扩展数据矩阵: 从 {dataset.data.shape} 到 ({len(timestamps)}, {len(lane_ids)}, {len(feature_cols)})")
+        # 创建新的数据矩阵
+        n_times = len(timestamps)
+        n_lanes = len(lane_ids)
+        n_features = len(feature_cols)
+        
+        full_data = np.full((n_times, n_lanes, n_features), np.nan)
+        training_mask = np.zeros((n_times, n_lanes, n_features), dtype=bool)
+        
+        # 从原始数据矩阵复制数据
+        for orig_t_idx, orig_t in enumerate(original_timestamps):
+            new_t_idx = new_time_to_idx.get(orig_t)
+            if new_t_idx is not None:
+                for orig_l_idx, orig_l in enumerate(original_lane_ids):
+                    new_l_idx = new_lane_to_idx.get(orig_l)
+                    if new_l_idx is not None:
+                        full_data[new_t_idx, new_l_idx, :] = dataset.data[orig_t_idx, orig_l_idx, :]
+                        training_mask[new_t_idx, new_l_idx, :] = dataset.training_mask[orig_t_idx, orig_l_idx, :]
+    else:
+        # 使用原始数据矩阵
+        full_data = dataset.data.copy()  # [time, nodes, features]
+        training_mask = dataset.training_mask.copy()  # [time, nodes, features]
+    
+    # 识别受路网限制的特征列（这些列如果原始值是-1，应该保持为-1）
+    graph_constrained_features = ['crossing_ratio', 'direct_ratio', 'near_ratio']
+    graph_constrained_indices = {}
+    for feat_name in graph_constrained_features:
+        if feat_name in feature_cols:
+            feat_idx = feature_cols.index(feat_name)
+            # 确定连接类型
+            if feat_name == 'crossing_ratio':
+                conn_type = 'crossing'
+            elif feat_name == 'direct_ratio':
+                conn_type = 'direct'
+            elif feat_name == 'near_ratio':
+                conn_type = 'near'
+            else:
+                conn_type = None
+            graph_constrained_indices[feat_idx] = conn_type
+    
+    # 从原始输入数据中获取-1的位置（从dynamic_df读取）
+    # 创建掩码：标记哪些位置应该是-1
+    minus_one_mask = np.zeros_like(full_data, dtype=bool)
+    if len(graph_constrained_indices) > 0 and hasattr(dataset, 'dynamic_df'):
+        # 从原始CSV数据中读取-1的位置
+        # 使用新的索引映射（可能已扩展）
+        time_to_idx = new_time_to_idx if len(timestamps) > len(original_timestamps) else {t: idx for idx, t in enumerate(timestamps)}
+        lane_id_to_idx = new_lane_to_idx if len(lane_ids) > len(original_lane_ids) else {lid: idx for idx, lid in enumerate(lane_ids)}
+        
+        for _, row in dataset.dynamic_df.iterrows():
+            time_idx = time_to_idx.get(row[time_col])
+            lane_idx = lane_id_to_idx.get(row[lane_id_col])
+            
+            if time_idx is not None and lane_idx is not None:
+                for feat_idx, conn_type in graph_constrained_indices.items():
+                    if feat_idx < len(feature_cols):
+                        feat_name = feature_cols[feat_idx]
+                        if feat_name in row:
+                            val = row[feat_name]
+                            # 如果原始数据中是-1，标记为应该保持-1
+                            if pd.notna(val) and val == -1.0:
+                                minus_one_mask[time_idx, lane_idx, feat_idx] = True
     
     # 获取窗口和步长信息
     window = dm.torch_dataset.window
@@ -352,47 +479,95 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
         y_hat_reshaped = y_hat
     
     # 映射窗口预测到完整时间序列
-    # 对于每个窗口，将窗口内的所有时间步都映射回去
-    # 对于重叠的时间步，使用最后一个窗口的值
+    # 注意：y_hat只包含原始时间范围内的预测结果，需要映射到原始时间范围
+    # 对于新增的时间（在mask文件中但不在原始数据中），这些位置保持为NaN
+    original_n_times = len(original_timestamps)
+    
+    # 映射窗口预测到原始时间序列（只映射到原始时间范围内的数据）
     window_idx = 0
-    for start_time in range(0, len(timestamps) - window + 1, stride):
+    for start_time in range(0, original_n_times - window + 1, stride):
         if window_idx >= num_windows:
             break
         
         # 获取该窗口的所有时间步预测 [window, nodes, features]
         window_preds = y_hat_reshaped[window_idx, :, :, :]
-        
         # 将该窗口的所有时间步映射回原始时间序列
         for w in range(window):
-            time_idx = start_time + w
-            if time_idx < len(timestamps):
-                # 对于缺失值位置，使用预测值；对于已知值位置，保留原始值
-                mask_missing = ~training_mask[time_idx, :, :]  # 缺失值的位置
-                window_pred = window_preds[w, :, :]  # [nodes, features]
-                full_data[time_idx, :, :] = np.where(mask_missing, window_pred, full_data[time_idx, :, :])
+            orig_time_idx = start_time + w
+            if orig_time_idx < original_n_times:
+                # 获取原始时间戳
+                orig_timestamp = original_timestamps[orig_time_idx]
+                # 找到在新时间列表中的索引
+                new_time_idx = new_time_to_idx.get(orig_timestamp)
+                
+                if new_time_idx is not None:
+                    # window_pred的形状是[原始节点数, features]，需要只映射到原始节点范围
+                    window_pred = window_preds[w, :, :]  # [原始节点数, features]
+                    
+                    # 只映射到原始节点范围内的数据
+                    for orig_l_idx, orig_lane_id in enumerate(original_lane_ids):
+                        new_l_idx = new_lane_to_idx.get(orig_lane_id)
+                        if new_l_idx is not None:
+                            # 对于缺失值位置，使用预测值；对于已知值位置，保留原始值
+                            mask_missing = ~training_mask[new_time_idx, new_l_idx, :]  # 缺失值的位置 [features]
+                            window_pred_lane = window_pred[orig_l_idx, :]  # [features]
+                            full_data[new_time_idx, new_l_idx, :] = np.where(
+                                mask_missing, window_pred_lane, full_data[new_time_idx, new_l_idx, :]
+                            )
+                            
+                            # 对于受路网限制的特征，如果原始数据是-1，则保持为-1
+                            if len(graph_constrained_indices) > 0:
+                                for feat_idx in graph_constrained_indices:
+                                    if feat_idx < full_data.shape[-1]:
+                                        # 如果原始数据中该位置是-1，则保持为-1
+                                        if minus_one_mask[new_time_idx, new_l_idx, feat_idx]:
+                                            full_data[new_time_idx, new_l_idx, feat_idx] = -1.0
         
         window_idx += 1
     
     # 如果还有剩余的预测值，处理最后一个窗口
-    if window_idx < num_windows and len(timestamps) > 0:
-        # 计算最后一个窗口的起始位置
-        last_start = len(timestamps) - window
+    if window_idx < num_windows and original_n_times > 0:
+        # 计算最后一个窗口的起始位置（基于原始时间范围）
+        last_start = original_n_times - window
         if last_start >= 0:
             window_preds = y_hat_reshaped[window_idx, :, :, :]
             for w in range(window):
-                time_idx = last_start + w
-                if time_idx < len(timestamps):
-                    mask_missing = ~training_mask[time_idx, :, :]
-                    window_pred = window_preds[w, :, :]
-                    full_data[time_idx, :, :] = np.where(mask_missing, window_pred, full_data[time_idx, :, :])
+                orig_time_idx = last_start + w
+                if orig_time_idx < original_n_times:
+                    orig_timestamp = original_timestamps[orig_time_idx]
+                    new_time_idx = new_time_to_idx.get(orig_timestamp)
+                    
+                    if new_time_idx is not None:
+                        # window_pred的形状是[原始节点数, features]，需要只映射到原始节点范围
+                        window_pred = window_preds[w, :, :]  # [原始节点数, features]
+                        
+                        # 只映射到原始节点范围内的数据
+                        for orig_l_idx, orig_lane_id in enumerate(original_lane_ids):
+                            new_l_idx = new_lane_to_idx.get(orig_lane_id)
+                            if new_l_idx is not None:
+                                # 对于缺失值位置，使用预测值；对于已知值位置，保留原始值
+                                mask_missing = ~training_mask[new_time_idx, new_l_idx, :]  # 缺失值的位置 [features]
+                                window_pred_lane = window_pred[orig_l_idx, :]  # [features]
+                                full_data[new_time_idx, new_l_idx, :] = np.where(
+                                    mask_missing, window_pred_lane, full_data[new_time_idx, new_l_idx, :]
+                                )
+                                
+                                # 对于受路网限制的特征，如果原始数据是-1，则保持为-1
+                                if len(graph_constrained_indices) > 0:
+                                    for feat_idx in graph_constrained_indices:
+                                        if feat_idx < full_data.shape[-1]:
+                                            # 如果原始数据中该位置是-1，则保持为-1
+                                            if minus_one_mask[new_time_idx, new_l_idx, feat_idx]:
+                                                full_data[new_time_idx, new_l_idx, feat_idx] = -1.0
     
     # 构建DataFrame
+    # 注意：先遍历lane_id，再遍历timestamp，这样构建的数据已经是按lane_id优先的顺序
     result_rows = []
-    for t_idx, timestamp in enumerate(timestamps):
-        for n_idx, lane_id in enumerate(lane_ids):
+    for n_idx, lane_id in enumerate(lane_ids):
+        for t_idx, timestamp in enumerate(timestamps):
             row = {
-                time_col: timestamp,
-                lane_id_col: lane_id
+                lane_id_col: lane_id,  # lane_id放在第一列
+                time_col: timestamp     # time_col放在第二列
             }
             # 添加所有特征列
             for f_idx, feature_name in enumerate(feature_cols):
@@ -405,8 +580,34 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
     # 创建DataFrame并保存
     result_df = pd.DataFrame(result_rows)
     
-    # 按时间和车道ID排序，与输入文件格式一致
-    result_df = result_df.sort_values([time_col, lane_id_col])
+    # 按lane_id优先排序，然后按时间排序（确保顺序：lane_id=0的所有时间，lane_id=1的所有时间...）
+    result_df = result_df.sort_values([lane_id_col, time_col])
+    
+    # 调整列顺序：确保lane_id_col是第一列，time_col是第二列，然后是特征列
+    column_order = [lane_id_col, time_col] + feature_cols
+    # 只保留实际存在的列
+    column_order = [col for col in column_order if col in result_df.columns]
+    result_df = result_df[column_order]
+    
+    # 格式化数值列：整数保持整数，1位小数保持1位，2位及以上四舍五入到2位
+    def format_number(x):
+        """格式化数值：保持整数和1位小数的原始格式，2位及以上四舍五入到2位"""
+        if pd.isna(x):
+            return x
+        # 检查是否为整数（考虑浮点误差）
+        if abs(x - round(x)) < 1e-10:
+            return int(round(x))
+        # 检查是否为1位小数
+        rounded_1 = round(x, 1)
+        if abs(x - rounded_1) < 1e-10:
+            return rounded_1
+        # 否则四舍五入到2位小数
+        return round(x, 2)
+    
+    numeric_cols = [col for col in result_df.columns 
+                   if col not in [time_col, lane_id_col]]
+    for col in numeric_cols:
+        result_df[col] = result_df[col].apply(format_number)
     
     # 保存为CSV
     output_path = Path(output_path)
@@ -603,16 +804,35 @@ def run_experiment(args):
         check_mae = numpy_metrics.masked_mae(y_hat, y_true, mask)
         mae.append(check_mae)
         seed_str = f'SEED {seed}' if seed is not None else 'NO SEED'
-        print(f'{seed_str} - Test MAE: {check_mae:.2f}')
+        print(f'{seed_str} - Test MAE: {check_mae:.3f}')
         
         # 保存填充结果（仅对lane数据集，且只保存第一个seed的结果）
         if dataset_name == 'lane' and args.output_path is not None and seed == seeds[0]:
             print(f"\n保存填充结果...")
             # 对所有数据进行推理（不仅仅是测试集）
             print("对所有数据进行推理...")
-            all_output_list = trainer.predict(imputer, dataloaders=dm.train_dataloader())
-            all_output_list.extend(trainer.predict(imputer, dataloaders=dm.val_dataloader()))
-            all_output_list.extend(trainer.predict(imputer, dataloaders=dm.test_dataloader()))
+            all_output_list = []
+            
+            # 训练集
+            train_dl = dm.train_dataloader()
+            if train_dl is not None:
+                train_output = trainer.predict(imputer, dataloaders=train_dl)
+                if train_output is not None:
+                    all_output_list.extend(train_output)
+            
+            # 验证集
+            val_dl = dm.val_dataloader()
+            if val_dl is not None:
+                val_output = trainer.predict(imputer, dataloaders=val_dl)
+                if val_output is not None:
+                    all_output_list.extend(val_output)
+            
+            # 测试集
+            test_dl = dm.test_dataloader()
+            if test_dl is not None:
+                test_output = trainer.predict(imputer, dataloaders=test_dl)
+                if test_output is not None:
+                    all_output_list.extend(test_output)
             
             # 合并所有批次的预测结果
             all_y_hat_list = []
@@ -629,12 +849,13 @@ def run_experiment(args):
             # 获取所有索引
             train_idx, val_idx, test_idx = splitter.split(dataset)
             save_imputed_results_lane(all_y_hat, dataset, dm, args.output_path, 
-                                     train_indices=train_idx, val_indices=val_idx, test_indices=test_idx)
+                                     train_indices=train_idx, val_indices=val_idx, test_indices=test_idx,
+                                     mask_data_path=args.mask_data_path)
 
     if len(mae) > 1:
-        print(f'MAE over {len(seeds)} runs: {np.mean(mae):.2f}±{np.std(mae):.2f}')
+        print(f'MAE over {len(seeds)} runs: {np.mean(mae):.3f}±{np.std(mae):.3f}')
     else:
-        print(f'Test MAE: {mae[0]:.2f}')
+        print(f'Test MAE: {mae[0]:.3f}')
 
 
 if __name__ == '__main__':
