@@ -314,6 +314,11 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
     
     n_time_steps, n_nodes, n_features = y_hat.shape
     
+    # 获取窗口和步长信息（提前获取，用于调试信息）
+    window = dm.torch_dataset.window
+    stride = dm.torch_dataset.stride
+    print(f"y_hat形状: {y_hat.shape}, window={window}, stride={stride}")
+    
     # 反标准化
     scaler = dm.scalers.get('data')
     if scaler is not None:
@@ -418,11 +423,8 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
                             if pd.notna(val) and val == -1.0:
                                 minus_one_mask[time_idx, lane_idx, feat_idx] = True
     
-    # 获取窗口和步长信息
-    window = dm.torch_dataset.window
-    stride = dm.torch_dataset.stride
-    
     # 将窗口化的预测结果映射回完整时间序列
+    # 注意：window和stride已经在前面获取了
     # y_hat 的形状是 [num_windows, window, nodes, features] 或 [num_windows * window, nodes, features]
     # 需要根据窗口的起始位置映射回原始时间序列
     
@@ -456,16 +458,39 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
     # 由于窗口化，我们需要知道每个窗口对应的时间步
     # 简化处理：假设窗口按顺序排列，每个窗口的最后一个时间步对应预测值
     
-    # 计算窗口数量
-    num_windows = n_time_steps // window if n_time_steps >= window else 1
+    # 理解y_hat的结构：
+    # y_hat的形状应该是 [num_windows * window, nodes, features] 或 [num_windows, window, nodes, features]
+    # 其中num_windows是根据原始时间序列长度、window和stride计算得出的
+    
+    # 计算实际应该有的窗口数量（基于原始时间序列）
+    original_n_times = len(original_timestamps)
+    if original_n_times >= window:
+        # 窗口数量 = (总时间步数 - 窗口大小) / 步长 + 1
+        expected_num_windows = (original_n_times - window) // stride + 1
+    else:
+        expected_num_windows = 1 if original_n_times > 0 else 0
+    
+    print(f"窗口映射信息:")
+    print(f"   原始时间步数: {original_n_times}, window={window}, stride={stride}")
+    print(f"   预期窗口数量: {expected_num_windows}")
+    print(f"   y_hat形状: {y_hat.shape}, n_time_steps={n_time_steps}")
     
     # 将y_hat重塑为 [num_windows, window, nodes, features]
     if len(y_hat.shape) == 3:
         # 如果是 [time, nodes, features]，需要重塑
-        if n_time_steps % window == 0:
+        # n_time_steps应该是 num_windows * window
+        if n_time_steps == expected_num_windows * window:
+            num_windows = expected_num_windows
             y_hat_reshaped = y_hat.reshape(num_windows, window, n_nodes, n_features)
+        elif n_time_steps % window == 0:
+            # 如果能被window整除，使用实际的时间步数
+            num_windows = n_time_steps // window
+            y_hat_reshaped = y_hat.reshape(num_windows, window, n_nodes, n_features)
+            print(f"   ⚠️ 注意: y_hat的时间步数({n_time_steps})与预期({expected_num_windows * window})不匹配")
+            print(f"   使用实际窗口数量: {num_windows}")
         else:
-            # 如果不能整除，填充或截断
+            # 如果不能整除，可能需要填充或截断
+            num_windows = (n_time_steps + window - 1) // window  # 向上取整
             target_size = num_windows * window
             if n_time_steps < target_size:
                 # 填充
@@ -476,14 +501,21 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
                 # 截断
                 y_hat_reshaped = y_hat[:target_size].reshape(num_windows, window, n_nodes, n_features)
     else:
+        # 如果已经是4维，直接使用
         y_hat_reshaped = y_hat
+        num_windows = y_hat.shape[0]
     
     # 映射窗口预测到完整时间序列
     # 注意：y_hat只包含原始时间范围内的预测结果，需要映射到原始时间范围
     # 对于新增的时间（在mask文件中但不在原始数据中），这些位置保持为NaN
     original_n_times = len(original_timestamps)
     
-    # 映射窗口预测到原始时间序列（只映射到原始时间范围内的数据）
+    # 创建一个数组来跟踪每个时间步是否已经被预测值覆盖
+    # 对于重叠的窗口，使用最后一个窗口的值
+    time_covered = np.zeros(original_n_times, dtype=bool)
+    
+    # 映射窗口预测到原始时间序列
+    # 根据ImputationDataset的窗口创建逻辑，窗口是按stride步长创建的
     window_idx = 0
     for start_time in range(0, original_n_times - window + 1, stride):
         if window_idx >= num_windows:
@@ -522,18 +554,21 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
                                         # 如果原始数据中该位置是-1，则保持为-1
                                         if minus_one_mask[new_time_idx, new_l_idx, feat_idx]:
                                             full_data[new_time_idx, new_l_idx, feat_idx] = -1.0
+                    
+                    time_covered[orig_time_idx] = True
         
         window_idx += 1
     
-    # 如果还有剩余的预测值，处理最后一个窗口
-    if window_idx < num_windows and original_n_times > 0:
-        # 计算最后一个窗口的起始位置（基于原始时间范围）
-        last_start = original_n_times - window
-        if last_start >= 0:
+    # 处理最后一个窗口（如果时间序列长度不能被stride整除，最后一个窗口可能没有完全覆盖）
+    if original_n_times > 0:
+        # 计算最后一个窗口的起始位置（确保覆盖最后几个时间点）
+        last_start = max(0, original_n_times - window)
+        if last_start >= 0 and window_idx < num_windows:
             window_preds = y_hat_reshaped[window_idx, :, :, :]
             for w in range(window):
                 orig_time_idx = last_start + w
                 if orig_time_idx < original_n_times:
+                    # 如果这个时间点还没有被覆盖，或者需要更新（使用最后一个窗口的值）
                     orig_timestamp = original_timestamps[orig_time_idx]
                     new_time_idx = new_time_to_idx.get(orig_timestamp)
                     
@@ -559,6 +594,21 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
                                             # 如果原始数据中该位置是-1，则保持为-1
                                             if minus_one_mask[new_time_idx, new_l_idx, feat_idx]:
                                                 full_data[new_time_idx, new_l_idx, feat_idx] = -1.0
+                        
+                        time_covered[orig_time_idx] = True
+    
+    # 检查是否有时间点没有被覆盖
+    uncovered_times = np.where(~time_covered)[0]
+    if len(uncovered_times) > 0:
+        print(f"⚠️ 注意: 有 {len(uncovered_times)} 个时间点没有被窗口覆盖（这是正常的，如果stride>1或窗口未完全覆盖）")
+        print(f"   未覆盖的时间点索引: {uncovered_times[:20] if len(uncovered_times) <= 20 else str(uncovered_times[:20]) + '...'}")
+        print(f"   原始时间范围: 0 到 {original_n_times-1}, window={window}, stride={stride}")
+        print(f"   窗口数量: {num_windows}, y_hat形状: {y_hat.shape}")
+        print(f"   这些时间点将保持为原始值或NaN（不会被预测值覆盖）")
+    
+    # 统计覆盖情况
+    coverage_ratio = time_covered.sum() / original_n_times if original_n_times > 0 else 0
+    print(f"✅ 时间点覆盖情况: {time_covered.sum()}/{original_n_times} ({coverage_ratio:.1%})")
     
     # 构建DataFrame
     # 注意：先遍历lane_id，再遍历timestamp，这样构建的数据已经是按lane_id优先的顺序
@@ -589,6 +639,25 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
     column_order = [col for col in column_order if col in result_df.columns]
     result_df = result_df[column_order]
     
+    # 过滤掉所有特征列都是NaN的行
+    # 注意：只检查特征列（feature_cols），不包括lane_id_col和time_col
+    # 如果只有lane_id_col和time_col有值，但所有特征列都是NaN，则不算有效数据，会被过滤掉
+    feature_cols_in_df = [col for col in feature_cols if col in result_df.columns]
+    if len(feature_cols_in_df) > 0:
+        # 检查每一行，如果所有特征列都是NaN，则过滤掉
+        # 使用any()检查是否有至少一个特征列不是NaN
+        # 只检查特征列，不检查lane_id_col和time_col
+        has_valid_data = result_df[feature_cols_in_df].notna().any(axis=1)
+        rows_before = len(result_df)
+        result_df = result_df[has_valid_data].copy()
+        rows_after = len(result_df)
+        rows_filtered = rows_before - rows_after
+        
+        if rows_filtered > 0:
+            print(f"📝 过滤掉 {rows_filtered} 行（所有特征列都是NaN，即使lane_id和time_col有值也不算有效数据）")
+    else:
+        print(f"⚠️ 警告: 没有找到特征列，无法过滤无效数据")
+    
     # 格式化数值列：整数保持整数，1位小数保持1位，2位及以上四舍五入到2位
     def format_number(x):
         """格式化数值：保持整数和1位小数的原始格式，2位及以上四舍五入到2位"""
@@ -615,7 +684,8 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
     result_df.to_csv(output_path, index=False)
     print(f"✅ 填充结果已保存到: {output_path}")
     print(f"   共 {len(result_df)} 条记录，{len(feature_cols)} 个特征列")
-    print(f"   时间范围: {result_df[time_col].min()} 到 {result_df[time_col].max()}")
+    if len(result_df) > 0:
+        print(f"   时间范围: {result_df[time_col].min()} 到 {result_df[time_col].max()}")
     
     return result_df
 
