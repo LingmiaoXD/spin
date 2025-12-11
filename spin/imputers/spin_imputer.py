@@ -169,7 +169,9 @@ class SPINImputer(pl.LightningModule):
         device = next(self.model.parameters()).device
         
         y = batch.y.clone().detach().to(device)
-        missing_mask = missing_mask.clone().detach().to(device)
+        # 确保missing_mask是float类型（mask值只可能是0或1，但可能是bool/int/float类型）
+        # 转换为float后，值仍然是0.0或1.0，只是数据类型变了
+        missing_mask = missing_mask.clone().detach().to(device).float()
         
         y_hat_loss = self.predict_batch(batch, preprocess=False, postprocess=False)
 
@@ -202,21 +204,23 @@ class SPINImputer(pl.LightningModule):
         # 我们需要缺失值mask: 1表示缺失（需要计算loss），0表示可观测（不计算loss）
         if hasattr(batch, 'original_mask') and hasattr(batch, 'mask'):
             # 如果有original_mask，计算新注入的缺失值
-            # original_mask: 原始数据中哪些点可观测
-            # batch.mask: 经过whiten后哪些点可观测
-            # injected_missing = original_mask - batch.mask: 新注入的缺失值
-            observed_mask = batch.mask.clone().detach().to(device)
-            original_observed = batch.original_mask.clone().detach().to(device)
+            # original_mask: 原始数据中哪些点可观测（值为0或1）
+            # batch.mask: 经过whiten后哪些点可观测（值为0或1）
+            # injected_missing = original_mask - batch.mask: 新注入的缺失值（值为0或1）
+            # 转换为float类型以支持减法运算，结果值仍然是0.0或1.0
+            observed_mask = batch.mask.clone().detach().to(device).float()
+            original_observed = batch.original_mask.clone().detach().to(device).float()
             missing_mask = (original_observed - observed_mask).to(device)
         else:
             # 如果没有original_mask，假设所有不可观测的点都是缺失点
-            # batch.mask: 1表示可观测，0表示缺失
-            # 缺失值mask = 1 - batch.mask: 1表示缺失，0表示可观测
+            # batch.mask: 1表示可观测，0表示缺失（值为0或1）
+            # 缺失值mask = 1 - batch.mask: 1表示缺失，0表示可观测（值为0或1）
+            # 转换为float类型以支持减法运算，结果值仍然是0.0或1.0
             if hasattr(batch, 'mask'):
-                observed_mask = batch.mask.clone().detach().to(device)
+                observed_mask = batch.mask.clone().detach().to(device).float()
             else:
                 # 如果没有mask，尝试使用eval_mask
-                observed_mask = batch.eval_mask.clone().detach().to(device)
+                observed_mask = batch.eval_mask.clone().detach().to(device).float()
             missing_mask = (1.0 - observed_mask).to(device)
         
         if hasattr(batch, 'target_nodes'):
@@ -243,9 +247,10 @@ class SPINImputer(pl.LightningModule):
         device = next(self.model.parameters()).device
         
         # 计算缺失值mask（只计算缺失点的loss）
-        # batch.eval_mask: 1表示可观测，0表示缺失
+        # batch.eval_mask: 1表示可观测，0表示缺失（值为0或1）
         # 缺失值mask = 1 - eval_mask: 1表示缺失（需要计算loss），0表示可观测（不计算loss）
-        eval_mask = batch.eval_mask.clone().detach().to(device)
+        # 转换为float类型以支持减法运算，结果值仍然是0.0或1.0
+        eval_mask = batch.eval_mask.clone().detach().to(device).float()
         missing_mask = (1.0 - eval_mask).to(device)
         y_hat, y, val_loss = self.shared_step(batch, missing_mask=missing_mask)
 
@@ -273,9 +278,11 @@ class SPINImputer(pl.LightningModule):
         y, eval_mask = batch.y.to(device), batch.eval_mask.to(device)
         y_hat = y_hat.to(device)
         # 计算缺失值mask（只计算缺失点的loss）
-        # eval_mask: 1表示可观测，0表示缺失
+        # eval_mask: 1表示可观测，0表示缺失（值为0或1）
         # 缺失值mask = 1 - eval_mask: 1表示缺失（需要计算loss），0表示可观测（不计算loss）
-        missing_mask = (1.0 - eval_mask).to(device)
+        # 转换为float类型以支持减法运算，结果值仍然是0.0或1.0
+        eval_mask_float = eval_mask.float()
+        missing_mask = (1.0 - eval_mask_float).to(device)
         test_loss = self.loss_fn(y_hat, y, missing_mask)
 
         # 更新指标 - 确保张量在正确设备上

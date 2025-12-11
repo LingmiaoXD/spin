@@ -145,3 +145,4 @@ target_readout = self.readout[l](h[..., target_nodes, :])
 - 更复杂的注意力机制：同时更新`h`和`z`
 - 更多的嵌入层来区分不同状态
 
+

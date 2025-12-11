@@ -2,10 +2,8 @@
 分析训练曲线，判断模型是欠拟合还是过拟合
 
 使用方法:
-    python experiments/analyze_training_curves.py --logdir <训练日志目录>
-    
-或者直接指定实验目录:
     python experiments/analyze_training_curves.py --logdir runs/lane/spin/20240101T120000_12345
+    python experiments/analyze_training_curves.py --logdir log/lane/spin/20251211T214457_481114253/model/version_0 --save-plot log/lane/spin/20251211T214457_481114253/plot/training_curve.png
 """
 
 import os
