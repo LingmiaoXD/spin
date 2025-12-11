@@ -158,13 +158,18 @@ class SPINImputer(pl.LightningModule):
                                            cut_edges_uniformly=self.cut_edges_uniformly)
         return batch
 
-    def shared_step(self, batch, mask):
-        """简化的shared_step方法"""
+    def shared_step(self, batch, missing_mask):
+        """简化的shared_step方法
+        
+        Args:
+            batch: 批次数据
+            missing_mask: 缺失值mask（1表示缺失，0表示可观测），用于计算loss
+        """
         # 获取设备信息
         device = next(self.model.parameters()).device
         
         y = batch.y.clone().detach().to(device)
-        mask = mask.clone().detach().to(device)
+        missing_mask = missing_mask.clone().detach().to(device)
         
         y_hat_loss = self.predict_batch(batch, preprocess=False, postprocess=False)
 
@@ -177,20 +182,13 @@ class SPINImputer(pl.LightningModule):
             predictions = []
             y_hat = imputation
 
-        # 计算损失
-        if self.training:
-            # 检查batch是否有original_mask属性
-            if hasattr(batch, 'original_mask'):
-                injected_missing = (batch.original_mask - batch.mask).clone().detach().to(device)
-                loss = self.loss_fn(imputation, y, injected_missing)
-            else:
-                loss = self.loss_fn(imputation, y, mask)
-        else:
-            loss = self.loss_fn(imputation, y, mask)
+        # 计算损失 - 只计算缺失点的loss（masked L1）
+        # missing_mask: 1表示缺失点（需要计算loss），0表示可观测点（不计算loss）
+        loss = self.loss_fn(imputation, y, missing_mask)
 
-        # 添加预测损失
+        # 添加预测损失（中间层的预测）
         for pred in predictions:
-            pred_loss = self.loss_fn(pred, y, mask)
+            pred_loss = self.loss_fn(pred, y, missing_mask)
             loss += self.prediction_loss_weight * pred_loss / 3
 
         return y_hat.detach(), y, loss
@@ -199,19 +197,32 @@ class SPINImputer(pl.LightningModule):
         # 获取设备信息
         device = self.get_device()
         
-        # 在训练时，使用mask作为缺失值指示器
-        # mask表示哪些值是可观测的（1表示可观测，0表示缺失）
-        # 我们在这些可观测的值上计算损失
-        if hasattr(batch, 'mask'):
-            injected_missing = batch.mask.clone().detach().to(device)
+        # 计算缺失值mask（只计算缺失点的loss）
+        # batch.mask: 1表示可观测，0表示缺失
+        # 我们需要缺失值mask: 1表示缺失（需要计算loss），0表示可观测（不计算loss）
+        if hasattr(batch, 'original_mask') and hasattr(batch, 'mask'):
+            # 如果有original_mask，计算新注入的缺失值
+            # original_mask: 原始数据中哪些点可观测
+            # batch.mask: 经过whiten后哪些点可观测
+            # injected_missing = original_mask - batch.mask: 新注入的缺失值
+            observed_mask = batch.mask.clone().detach().to(device)
+            original_observed = batch.original_mask.clone().detach().to(device)
+            missing_mask = (original_observed - observed_mask).to(device)
         else:
-            # 如果没有mask，尝试使用eval_mask
-            injected_missing = batch.eval_mask.clone().detach().to(device)
+            # 如果没有original_mask，假设所有不可观测的点都是缺失点
+            # batch.mask: 1表示可观测，0表示缺失
+            # 缺失值mask = 1 - batch.mask: 1表示缺失，0表示可观测
+            if hasattr(batch, 'mask'):
+                observed_mask = batch.mask.clone().detach().to(device)
+            else:
+                # 如果没有mask，尝试使用eval_mask
+                observed_mask = batch.eval_mask.clone().detach().to(device)
+            missing_mask = (1.0 - observed_mask).to(device)
         
         if hasattr(batch, 'target_nodes'):
-            injected_missing = injected_missing[..., batch.target_nodes, :]
+            missing_mask = missing_mask[..., batch.target_nodes, :]
         
-        y_hat, y, loss = self.shared_step(batch, mask=injected_missing)
+        y_hat, y, loss = self.shared_step(batch, missing_mask=missing_mask)
 
         # 更新指标 - 确保张量在正确设备上
         for name, metric in self.train_metrics.items():
@@ -231,9 +242,12 @@ class SPINImputer(pl.LightningModule):
         # 获取设备信息
         device = next(self.model.parameters()).device
         
-        # 确保mask不共享内存并移到正确设备
+        # 计算缺失值mask（只计算缺失点的loss）
+        # batch.eval_mask: 1表示可观测，0表示缺失
+        # 缺失值mask = 1 - eval_mask: 1表示缺失（需要计算loss），0表示可观测（不计算loss）
         eval_mask = batch.eval_mask.clone().detach().to(device)
-        y_hat, y, val_loss = self.shared_step(batch, eval_mask)
+        missing_mask = (1.0 - eval_mask).to(device)
+        y_hat, y, val_loss = self.shared_step(batch, missing_mask=missing_mask)
 
         # 更新指标 - 确保张量在正确设备上
         for name, metric in self.val_metrics.items():
@@ -258,7 +272,11 @@ class SPINImputer(pl.LightningModule):
 
         y, eval_mask = batch.y.to(device), batch.eval_mask.to(device)
         y_hat = y_hat.to(device)
-        test_loss = self.loss_fn(y_hat, y, eval_mask)
+        # 计算缺失值mask（只计算缺失点的loss）
+        # eval_mask: 1表示可观测，0表示缺失
+        # 缺失值mask = 1 - eval_mask: 1表示缺失（需要计算loss），0表示可观测（不计算loss）
+        missing_mask = (1.0 - eval_mask).to(device)
+        test_loss = self.loss_fn(y_hat, y, missing_mask)
 
         # 更新指标 - 确保张量在正确设备上
         for name, metric in self.test_metrics.items():
