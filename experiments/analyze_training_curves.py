@@ -61,6 +61,22 @@ def load_tensorboard_logs(logdir):
     return metrics
 
 
+def _get_metric_values(metrics, metric_name):
+    """尝试多种格式获取指标值"""
+    # 尝试多种可能的键名格式
+    possible_keys = [
+        f'{metric_name}/epoch',  # 带 /epoch 后缀
+        metric_name,             # 不带后缀
+        f'{metric_name}/step',   # 带 /step 后缀
+    ]
+    
+    for key in possible_keys:
+        if key in metrics:
+            return metrics[key].get('values', [])
+    
+    return []
+
+
 def analyze_fitting(metrics):
     """分析训练曲线，判断欠拟合/过拟合"""
     results = {
@@ -74,14 +90,17 @@ def analyze_fitting(metrics):
         'recommendations': []
     }
     
-    # 提取关键指标
-    train_mae = metrics.get('train_mae/epoch', {}).get('values', [])
-    val_mae = metrics.get('val_mae/epoch', {}).get('values', [])
-    train_loss = metrics.get('train_loss/epoch', {}).get('values', [])
-    val_loss = metrics.get('val_loss/epoch', {}).get('values', [])
+    # 提取关键指标（支持多种格式）
+    train_mae = _get_metric_values(metrics, 'train_mae')
+    val_mae = _get_metric_values(metrics, 'val_mae')
+    train_loss = _get_metric_values(metrics, 'train_loss')
+    val_loss = _get_metric_values(metrics, 'val_loss')
     
     if not train_mae or not val_mae:
         print("⚠️  警告: 未找到足够的训练指标数据")
+        print(f"   找到的训练指标键: {list(metrics.keys())}")
+        print(f"   train_mae 数据点数: {len(train_mae)}")
+        print(f"   val_mae 数据点数: {len(val_mae)}")
         return results
     
     # 获取最后几个epoch的平均值（避免波动）
@@ -169,6 +188,21 @@ def analyze_fitting(metrics):
     return results
 
 
+def _get_metric_data(metrics, metric_name):
+    """获取指标的数据（steps和values）"""
+    possible_keys = [
+        f'{metric_name}/epoch',
+        metric_name,
+        f'{metric_name}/step',
+    ]
+    
+    for key in possible_keys:
+        if key in metrics:
+            return metrics[key].get('steps', []), metrics[key].get('values', [])
+    
+    return None, None
+
+
 def plot_training_curves(metrics, output_path=None):
     """绘制训练曲线"""
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
@@ -176,14 +210,12 @@ def plot_training_curves(metrics, output_path=None):
     
     # MAE曲线
     ax1 = axes[0, 0]
-    if 'train_mae/epoch' in metrics:
-        train_steps = metrics['train_mae/epoch']['steps']
-        train_values = metrics['train_mae/epoch']['values']
+    train_steps, train_values = _get_metric_data(metrics, 'train_mae')
+    if train_steps and train_values:
         ax1.plot(train_steps, train_values, label='Train MAE', linewidth=2, alpha=0.8)
     
-    if 'val_mae/epoch' in metrics:
-        val_steps = metrics['val_mae/epoch']['steps']
-        val_values = metrics['val_mae/epoch']['values']
+    val_steps, val_values = _get_metric_data(metrics, 'val_mae')
+    if val_steps and val_values:
         ax1.plot(val_steps, val_values, label='Val MAE', linewidth=2, alpha=0.8)
     
     ax1.set_xlabel('Epoch')
@@ -194,15 +226,13 @@ def plot_training_curves(metrics, output_path=None):
     
     # Loss曲线
     ax2 = axes[0, 1]
-    if 'train_loss/epoch' in metrics:
-        train_steps = metrics['train_loss/epoch']['steps']
-        train_values = metrics['train_loss/epoch']['values']
-        ax2.plot(train_steps, train_values, label='Train Loss', linewidth=2, alpha=0.8)
+    train_loss_steps, train_loss_values = _get_metric_data(metrics, 'train_loss')
+    if train_loss_steps and train_loss_values:
+        ax2.plot(train_loss_steps, train_loss_values, label='Train Loss', linewidth=2, alpha=0.8)
     
-    if 'val_loss/epoch' in metrics:
-        val_steps = metrics['val_loss/epoch']['steps']
-        val_values = metrics['val_loss/epoch']['values']
-        ax2.plot(val_steps, val_values, label='Val Loss', linewidth=2, alpha=0.8)
+    val_loss_steps, val_loss_values = _get_metric_data(metrics, 'val_loss')
+    if val_loss_steps and val_loss_values:
+        ax2.plot(val_loss_steps, val_loss_values, label='Val Loss', linewidth=2, alpha=0.8)
     
     ax2.set_xlabel('Epoch')
     ax2.set_ylabel('Loss')
@@ -212,15 +242,13 @@ def plot_training_curves(metrics, output_path=None):
     
     # MSE曲线
     ax3 = axes[1, 0]
-    if 'train_mse/epoch' in metrics:
-        train_steps = metrics['train_mse/epoch']['steps']
-        train_values = metrics['train_mse/epoch']['values']
-        ax3.plot(train_steps, train_values, label='Train MSE', linewidth=2, alpha=0.8)
+    train_mse_steps, train_mse_values = _get_metric_data(metrics, 'train_mse')
+    if train_mse_steps and train_mse_values:
+        ax3.plot(train_mse_steps, train_mse_values, label='Train MSE', linewidth=2, alpha=0.8)
     
-    if 'val_mse/epoch' in metrics:
-        val_steps = metrics['val_mse/epoch']['steps']
-        val_values = metrics['val_mse/epoch']['values']
-        ax3.plot(val_steps, val_values, label='Val MSE', linewidth=2, alpha=0.8)
+    val_mse_steps, val_mse_values = _get_metric_data(metrics, 'val_mse')
+    if val_mse_steps and val_mse_values:
+        ax3.plot(val_mse_steps, val_mse_values, label='Val MSE', linewidth=2, alpha=0.8)
     
     ax3.set_xlabel('Epoch')
     ax3.set_ylabel('MSE')
@@ -230,22 +258,21 @@ def plot_training_curves(metrics, output_path=None):
     
     # Gap曲线（验证集 - 训练集）
     ax4 = axes[1, 1]
-    if 'train_mae/epoch' in metrics and 'val_mae/epoch' in metrics:
-        train_steps = metrics['train_mae/epoch']['steps']
-        train_values = metrics['train_mae/epoch']['values']
-        val_steps = metrics['val_mae/epoch']['steps']
-        val_values = metrics['val_mae/epoch']['values']
-        
+    train_mae_steps, train_mae_values = _get_metric_data(metrics, 'train_mae')
+    val_mae_steps, val_mae_values = _get_metric_data(metrics, 'val_mae')
+    
+    if train_mae_steps and train_mae_values and val_mae_steps and val_mae_values:
         # 对齐steps
-        common_steps = sorted(set(train_steps) & set(val_steps))
-        train_aligned = [train_values[train_steps.index(s)] for s in common_steps]
-        val_aligned = [val_values[val_steps.index(s)] for s in common_steps]
-        gap = [v - t for t, v in zip(train_aligned, val_aligned)]
-        
-        ax4.plot(common_steps, gap, label='Val - Train Gap', linewidth=2, 
-                color='red', alpha=0.8)
-        ax4.axhline(y=0, color='black', linestyle='--', alpha=0.5)
-        ax4.fill_between(common_steps, 0, gap, alpha=0.3, color='red')
+        common_steps = sorted(set(train_mae_steps) & set(val_mae_steps))
+        if common_steps:
+            train_aligned = [train_mae_values[train_mae_steps.index(s)] for s in common_steps]
+            val_aligned = [val_mae_values[val_mae_steps.index(s)] for s in common_steps]
+            gap = [v - t for t, v in zip(train_aligned, val_aligned)]
+            
+            ax4.plot(common_steps, gap, label='Val - Train Gap', linewidth=2, 
+                    color='red', alpha=0.8)
+            ax4.axhline(y=0, color='black', linestyle='--', alpha=0.5)
+            ax4.fill_between(common_steps, 0, gap, alpha=0.3, color='red')
     
     ax4.set_xlabel('Epoch')
     ax4.set_ylabel('Gap (Val - Train)')
@@ -349,4 +376,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
