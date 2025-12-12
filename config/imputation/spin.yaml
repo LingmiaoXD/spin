@@ -23,11 +23,13 @@ data_groups:
 whiten_prob: [0.2, 0.5, 0.8]
 scale_target: True
 
-epochs: 80
+epochs: 20  # 最大训练轮数。如果知道想要在哪个epoch停止，直接设置为此值即可
 loss_fn: l1_loss
 lr_scheduler: magic
 lr: 0.0008
-patience: 5
+patience: 5  # 早停耐心值：验证集MAE连续N个epoch没有改善就停止
+min_delta: 0.001  # 早停的最小改善阈值，验证集MAE需要改善至少这个值才不算"没有改善"。设置为0则任何改善都算
+l2_reg: 0.0001  # L2正则化，防止过拟合。如果过拟合严重，可以增加到0.001
 precision: 32
 batch_size: 4
 split_batch_in: 2

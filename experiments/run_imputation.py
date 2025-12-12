@@ -179,6 +179,8 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--patience', type=int, default=40)
+    parser.add_argument('--min-delta', type=float, default=0.0,
+                       help='Early stopping minimum delta. Validation metric must improve by at least this amount.')
     parser.add_argument('--l2-reg', type=float, default=0.)
     parser.add_argument('--batches-epoch', type=int, default=300)
     parser.add_argument('--batch-inference', type=int, default=32)
@@ -219,6 +221,14 @@ def parse_args():
     # 恢复checkpoint相关参数
     args.checkpoint_path = checkpoint_path
     args.skip_train = skip_train
+    
+    # 确保数值参数被正确转换为浮点数（防止YAML解析为字符串）
+    if hasattr(args, 'l2_reg'):
+        args.l2_reg = float(args.l2_reg)
+    if hasattr(args, 'min_delta'):
+        args.min_delta = float(args.min_delta)
+    if hasattr(args, 'lr'):
+        args.lr = float(args.lr)
     
     # 处理 dataset_name 可能是列表的情况（从YAML配置中加载时）
     if isinstance(args.dataset_name, list):
@@ -385,7 +395,9 @@ def run_experiment(args):
 
     # callbacks
     early_stop_callback = EarlyStopping(monitor='val_mae',
-                                        patience=args.patience, mode='min',
+                                        patience=args.patience, 
+                                        mode='min',
+                                        min_delta=getattr(args, 'min_delta', 0.0),
                                         check_on_train_epoch_end=False)
     checkpoint_callback = ModelCheckpoint(dirpath=logdir, save_top_k=1,
                                           monitor='val_mae', mode='min')
