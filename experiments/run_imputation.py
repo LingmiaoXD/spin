@@ -219,6 +219,10 @@ def parse_args():
     # 恢复checkpoint相关参数
     args.checkpoint_path = checkpoint_path
     args.skip_train = skip_train
+    
+    # 处理 dataset_name 可能是列表的情况（从YAML配置中加载时）
+    if isinstance(args.dataset_name, list):
+        args.dataset_name = args.dataset_name[0]
 
     return args
 

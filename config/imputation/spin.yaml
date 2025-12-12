@@ -1,7 +1,7 @@
 ##########################        SPIN CONFIG        ##########################
 
 #### Dataset params ###########################################################
-dataset_name: [la_point, bay_point, la_bock, bay_bock, air, air36, lane]
+dataset_name: lane
 val_len: 0.1
 
 window: 10
