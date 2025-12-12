@@ -146,3 +146,4 @@ target_readout = self.readout[l](h[..., target_nodes, :])
 - 更多的嵌入层来区分不同状态
 
 
+

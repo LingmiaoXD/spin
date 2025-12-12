@@ -28,7 +28,7 @@ loss_fn: l1_loss
 lr_scheduler: magic
 lr: 0.0008
 patience: 5
-precision: 16
+precision: 32
 batch_size: 4
 split_batch_in: 2
 batches_epoch: 300
@@ -36,7 +36,7 @@ gradient_checkpointing: True
 
 #### Model params #############################################################
 model_name: 'spin'
-hidden_size: 16
+hidden_size: 32
 eta: 2
 n_layers: 3
 message_layers: 1
