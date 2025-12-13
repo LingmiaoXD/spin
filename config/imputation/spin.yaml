@@ -9,21 +9,21 @@ stride: 1
 
 # 多组数据配置
 data_groups:
-  - static: ./data/graph.json
+  - static: ./data/graph_40m.json
     dynamic: ./data/d210240830_lane_node_stats.csv
     mask: ./data/d210240830_lane_mask.csv
-  - static: ./data/graph.json
-    dynamic: ./data/d210240900_merged_lane_node_stats.csv
-    mask: ./data/d210240900_merged_lane_mask.csv
-  - static: ./data/graph.json
-    dynamic: ./data/d210240930_merged_lane_node_stats.csv
-    mask: ./data/d210240930_merged_lane_mask.csv
+  - static: ./data/graph_40m.json
+    dynamic: ./data/d210240900_lane_node_stats.csv
+    mask: ./data/d210240900_lane_mask.csv
+  - static: ./data/graph_40m.json
+    dynamic: ./data/d210240930_lane_node_stats.csv
+    mask: ./data/d210240930_lane_mask.csv
 
 #### Training params ##########################################################
 whiten_prob: [0.2, 0.5, 0.8]
 scale_target: True
 
-epochs: 20  # 最大训练轮数。如果知道想要在哪个epoch停止，直接设置为此值即可
+epochs: 8  # 最大训练轮数。如果知道想要在哪个epoch停止，直接设置为此值即可
 loss_fn: l1_loss
 lr_scheduler: magic
 lr: 0.0008

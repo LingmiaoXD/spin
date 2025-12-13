@@ -70,9 +70,6 @@
 | `medium_ratio` | float | 中型车比例 | - | 0.0 |
 | `heavy_ratio` | float | 重型车比例 | - | 0.0 |
 | `motorcycle_ratio` | float | 摩托车比例 | - | 0.0 |
-| `crossing_ratio` | float | 交叉路口转向比例 | - | -1.0（无交叉路段）, 0.5 |
-| `direct_ratio` | float | 直行比例 | - | -1.0（无直行路段）, 1.0 |
-| `near_ratio` | float | 变道比例 | - | -1.0（无变道路段）, 0.3 |
 
 > **注意**：`-1.0` 表示该字段不适用
 
@@ -80,12 +77,12 @@
 
 **CSV格式（推荐）：**
 ```csv
-lane_id,start_frame,avg_speed,avg_occupancy,total_vehicles,car_ratio,medium_ratio,heavy_ratio,motorcycle_ratio,crossing_ratio,direct_ratio,near_ratio
-0,0.0,0.0,0.4,0.26,1.0,0.0,0.0,0.0,-1.0,0.0,-1.0
-0,10.0,0.0,0.4,0.26,1.0,0.0,0.0,0.0,-1.0,0.0,-1.0
-0,20.0,0.03,0.4,0.26,1.0,0.0,0.0,0.0,-1.0,1.0,-1.0
-1,0.0,0.05,0.35,0.30,0.8,0.1,0.1,0.0,0.5,0.4,0.1
-1,10.0,0.08,0.38,0.32,0.75,0.15,0.1,0.0,0.6,0.3,0.1
+lane_id,start_frame,avg_speed,avg_occupancy,total_vehicles,car_ratio,medium_ratio,heavy_ratio,motorcycle_ratio
+0,0.0,0.0,0.4,0.26,1.0,0.0,0.0,0.0
+0,10.0,0.0,0.4,0.26,1.0,0.0,0.0,0.0
+0,20.0,0.03,0.4,0.26,1.0,0.0,0.0,0.0
+1,0.0,0.05,0.35,0.30,0.8,0.1,0.1,0.0
+1,10.0,0.08,0.38,0.32,0.75,0.15,0.1,0.0
 ```
 
 ## 数据关系
@@ -168,12 +165,10 @@ with open("static_road_data.json", "w") as f:
 dynamic_data = pd.DataFrame([
     {"lane_id": 0, "start_frame": 0.0, "avg_speed": 0.0, "avg_occupancy": 0.4, 
      "total_vehicles": 0.26, "car_ratio": 1.0, "medium_ratio": 0.0, 
-     "heavy_ratio": 0.0, "motorcycle_ratio": 0.0, "crossing_ratio": -1.0, 
-     "direct_ratio": 0.0, "near_ratio": -1.0},
+     "heavy_ratio": 0.0, "motorcycle_ratio": 0.0},
     {"lane_id": 0, "start_frame": 10.0, "avg_speed": 0.03, "avg_occupancy": 0.4, 
      "total_vehicles": 0.26, "car_ratio": 1.0, "medium_ratio": 0.0, 
-     "heavy_ratio": 0.0, "motorcycle_ratio": 0.0, "crossing_ratio": -1.0, 
-     "direct_ratio": 1.0, "near_ratio": -1.0}
+     "heavy_ratio": 0.0, "motorcycle_ratio": 0.0}
 ])
 
 dynamic_data.to_csv("dynamic_traffic_data.csv", index=False)
@@ -219,9 +214,6 @@ dataset:
     medium_ratio: 'medium_ratio'
     heavy_ratio: 'heavy_ratio'
     motorcycle_ratio: 'motorcycle_ratio'
-    crossing_ratio: 'crossing_ratio'
-    direct_ratio: 'direct_ratio'
-    near_ratio: 'near_ratio'
   
   # 数据处理参数
   window_size: 12

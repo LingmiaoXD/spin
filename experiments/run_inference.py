@@ -383,46 +383,6 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
         full_data = dataset.data.copy()  # [time, nodes, features]
         training_mask = dataset.training_mask.copy()  # [time, nodes, features]
     
-    # 识别受路网限制的特征列（这些列如果原始值是-1，应该保持为-1）
-    graph_constrained_features = ['crossing_ratio', 'direct_ratio', 'near_ratio']
-    graph_constrained_indices = {}
-    for feat_name in graph_constrained_features:
-        if feat_name in feature_cols:
-            feat_idx = feature_cols.index(feat_name)
-            # 确定连接类型
-            if feat_name == 'crossing_ratio':
-                conn_type = 'crossing'
-            elif feat_name == 'direct_ratio':
-                conn_type = 'direct'
-            elif feat_name == 'near_ratio':
-                conn_type = 'near'
-            else:
-                conn_type = None
-            graph_constrained_indices[feat_idx] = conn_type
-    
-    # 从原始输入数据中获取-1的位置（从dynamic_df读取）
-    # 创建掩码：标记哪些位置应该是-1
-    minus_one_mask = np.zeros_like(full_data, dtype=bool)
-    if len(graph_constrained_indices) > 0 and hasattr(dataset, 'dynamic_df'):
-        # 从原始CSV数据中读取-1的位置
-        # 使用新的索引映射（可能已扩展）
-        time_to_idx = new_time_to_idx if len(timestamps) > len(original_timestamps) else {t: idx for idx, t in enumerate(timestamps)}
-        lane_id_to_idx = new_lane_to_idx if len(lane_ids) > len(original_lane_ids) else {lid: idx for idx, lid in enumerate(lane_ids)}
-        
-        for _, row in dataset.dynamic_df.iterrows():
-            time_idx = time_to_idx.get(row[time_col])
-            lane_idx = lane_id_to_idx.get(row[lane_id_col])
-            
-            if time_idx is not None and lane_idx is not None:
-                for feat_idx, conn_type in graph_constrained_indices.items():
-                    if feat_idx < len(feature_cols):
-                        feat_name = feature_cols[feat_idx]
-                        if feat_name in row:
-                            val = row[feat_name]
-                            # 如果原始数据中是-1，标记为应该保持-1
-                            if pd.notna(val) and val == -1.0:
-                                minus_one_mask[time_idx, lane_idx, feat_idx] = True
-    
     # 将窗口化的预测结果映射回完整时间序列
     # 注意：window和stride已经在前面获取了
     # y_hat 的形状是 [num_windows, window, nodes, features] 或 [num_windows * window, nodes, features]
@@ -546,14 +506,6 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
                             full_data[new_time_idx, new_l_idx, :] = np.where(
                                 mask_missing, window_pred_lane, full_data[new_time_idx, new_l_idx, :]
                             )
-                            
-                            # 对于受路网限制的特征，如果原始数据是-1，则保持为-1
-                            if len(graph_constrained_indices) > 0:
-                                for feat_idx in graph_constrained_indices:
-                                    if feat_idx < full_data.shape[-1]:
-                                        # 如果原始数据中该位置是-1，则保持为-1
-                                        if minus_one_mask[new_time_idx, new_l_idx, feat_idx]:
-                                            full_data[new_time_idx, new_l_idx, feat_idx] = -1.0
                     
                     time_covered[orig_time_idx] = True
         
@@ -586,14 +538,6 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
                                 full_data[new_time_idx, new_l_idx, :] = np.where(
                                     mask_missing, window_pred_lane, full_data[new_time_idx, new_l_idx, :]
                                 )
-                                
-                                # 对于受路网限制的特征，如果原始数据是-1，则保持为-1
-                                if len(graph_constrained_indices) > 0:
-                                    for feat_idx in graph_constrained_indices:
-                                        if feat_idx < full_data.shape[-1]:
-                                            # 如果原始数据中该位置是-1，则保持为-1
-                                            if minus_one_mask[new_time_idx, new_l_idx, feat_idx]:
-                                                full_data[new_time_idx, new_l_idx, feat_idx] = -1.0
                         
                         time_covered[orig_time_idx] = True
     
