@@ -270,9 +270,9 @@ class LaneTrafficDataset(Dataset):
                         elif conn_type == 'near':
                             weight = 0.5
                         elif conn_type == 'crossing':
-                            weight = 0.3
+                            weight = 0.5
                         else:
-                            weight = 0.1
+                            weight = 0.5
                         
                         # 添加双向连接
                         adj_matrix[source_idx, target_idx] = max(adj_matrix[source_idx, target_idx], weight)
@@ -380,17 +380,26 @@ class LaneTrafficDataset(Dataset):
         return self.data
         
     def datetime_encoded(self, encoding: List[str]) -> pd.DataFrame:
-        """获取时间编码 - 适用于短时间尺度连续数据"""
+        """
+        获取时间编码 - 使用真实时间差（不做 sin/cos），并保留相对进度
+
+        返回两列：
+        - time_linear: 相对进度 [0,1]
+        - delta_t: 相邻时间步的真实时间差（与原始时间戳同单位），首个时间步置 0
+        """
         n_times = len(self.timestamps)
         df = pd.DataFrame(index=range(n_times))
-        
+
         # 归一化时间位置 [0, 1]
         t_min, t_max = self.timestamps.min(), self.timestamps.max()
         normalized_t = (self.timestamps - t_min) / (t_max - t_min + 1e-8)
-        
-        # 线性时间位置
         df['time_linear'] = normalized_t
-        
+
+        # 真实时间差特征（首步为 0）
+        ts = self.timestamps.astype(float)
+        delta = np.diff(ts, prepend=ts[0])
+        df['delta_t'] = delta
+
         return df
         
     def get_splitter(self, val_len: float = None, test_len: float = None):

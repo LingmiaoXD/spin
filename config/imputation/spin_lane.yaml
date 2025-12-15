@@ -5,7 +5,7 @@ dataset_name: 'lane'
 val_len: 0.1
 test_len: 0.2
 
-window: 12  # 时间窗口大小
+window: 10  # 时间窗口大小
 stride: 1
 
 #### Training params ##########################################################
