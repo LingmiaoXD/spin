@@ -152,6 +152,7 @@ class TemporalAdditiveAttention(AdditiveAttention):
                  dropout: float = 0.0,
                  temporal_distance_bias: bool = True,
                  temporal_bias_scale: float = 1.0,
+                 max_temporal_distance: Optional[int] = None,
                  **kwargs):
         kwargs.setdefault('dim', 1)
         super().__init__(input_size=input_size,
@@ -165,6 +166,7 @@ class TemporalAdditiveAttention(AdditiveAttention):
                          **kwargs)
         self.temporal_distance_bias = temporal_distance_bias
         self.temporal_bias_scale = temporal_bias_scale
+        self.max_temporal_distance = max_temporal_distance
 
     def forward(self, x: PairTensor, mask: OptTensor = None,
                 temporal_mask: OptTensor = None,
@@ -196,7 +198,21 @@ class TemporalAdditiveAttention(AdditiveAttention):
                 j_grid, i_grid = torch.meshgrid([j, i])
             edge_index = torch.stack((j_grid[temporal_mask], i_grid[temporal_mask]))
         else:
-            edge_index = torch.cartesian_prod(j, i).T
+            # 如果没有提供temporal_mask，根据max_temporal_distance限制连接范围
+            if self.max_temporal_distance is not None:
+                # 只连接距离在max_temporal_distance内的时间步
+                try:
+                    # PyTorch >= 1.10.0 支持 indexing 参数
+                    i_grid, j_grid = torch.meshgrid([i, j], indexing='ij')
+                except TypeError:
+                    # 旧版本 PyTorch，需要转置
+                    j_grid, i_grid = torch.meshgrid([j, i])
+                distances = torch.abs(i_grid - j_grid)
+                mask = distances <= self.max_temporal_distance
+                edge_index = torch.stack((j_grid[mask], i_grid[mask]))
+            else:
+                # 如果没有限制，使用全连接（保持向后兼容）
+                edge_index = torch.cartesian_prod(j, i).T
 
         # 计算时间距离偏置：距离越短，偏置越大
         if self.temporal_distance_bias:

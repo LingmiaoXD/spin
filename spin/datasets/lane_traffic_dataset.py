@@ -165,6 +165,27 @@ class LaneTrafficDataset(Dataset):
         
         # 从动态数据创建唯一的时间戳索引
         self.timestamps = np.sort(self.dynamic_df[self.time_col].unique())
+        # 如果提供了mask文件，将其中的时间戳并入时间轴，确保mask与数据时间对齐
+        if any(p is not None for p in self.mask_data_paths):
+            mask_times = []
+            for mask_path in self.mask_data_paths:
+                if mask_path is None:
+                    continue
+                mp = Path(mask_path)
+                if not mp.exists():
+                    continue
+                try:
+                    mask_df = pd.read_csv(mp)
+                    if self.mask_time_col in mask_df.columns:
+                        mask_times.extend(mask_df[self.mask_time_col].unique().tolist())
+                except Exception as e:
+                    print(f"⚠️ 警告: 读取掩码文件时间列失败 {mp}: {e}")
+            if mask_times:
+                union_times = np.unique(np.concatenate([self.timestamps, np.array(mask_times)]))
+                if len(union_times) != len(self.timestamps):
+                    added = len(union_times) - len(self.timestamps)
+                    print(f"✅ 已将掩码文件中的 {added} 个时间戳并入时间轴，保证与mask对齐")
+                self.timestamps = union_times
         
         # 从静态数据创建唯一的lane_id索引
         self.lane_ids = np.array([node[self.lane_id_col] for node in self.static_nodes])
