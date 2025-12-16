@@ -150,6 +150,8 @@ class TemporalAdditiveAttention(AdditiveAttention):
                  reweight: Optional[str] = None,
                  norm: bool = True,
                  dropout: float = 0.0,
+                 temporal_distance_bias: bool = True,
+                 temporal_bias_scale: float = 1.0,
                  **kwargs):
         kwargs.setdefault('dim', 1)
         super().__init__(input_size=input_size,
@@ -161,6 +163,8 @@ class TemporalAdditiveAttention(AdditiveAttention):
                          dropout=dropout,
                          norm=norm,
                          **kwargs)
+        self.temporal_distance_bias = temporal_distance_bias
+        self.temporal_bias_scale = temporal_bias_scale
 
     def forward(self, x: PairTensor, mask: OptTensor = None,
                 temporal_mask: OptTensor = None,
@@ -183,10 +187,52 @@ class TemporalAdditiveAttention(AdditiveAttention):
                                                      device=x_src.device))
         if temporal_mask is not None:
             assert temporal_mask.size() == (l, s)
-            i, j = torch.meshgrid(i, j)
-            edge_index = torch.stack((j[temporal_mask], i[temporal_mask]))
+            # 使用兼容的方式创建网格
+            try:
+                # PyTorch >= 1.10.0 支持 indexing 参数
+                i_grid, j_grid = torch.meshgrid([i, j], indexing='ij')
+            except TypeError:
+                # 旧版本 PyTorch，需要转置
+                j_grid, i_grid = torch.meshgrid([j, i])
+            edge_index = torch.stack((j_grid[temporal_mask], i_grid[temporal_mask]))
         else:
             edge_index = torch.cartesian_prod(j, i).T
 
+        # 计算时间距离偏置：距离越短，偏置越大
+        if self.temporal_distance_bias:
+            # edge_index: [2, num_edges], 第一行是源时间步j，第二行是目标时间步i
+            temporal_distances = torch.abs(edge_index[0] - edge_index[1]).float()
+            # 将距离转换为偏置：距离越短，偏置越大（使用负指数或倒数）
+            # 使用 exp(-scale * distance) 使得距离越短，偏置越大
+            temporal_bias = torch.exp(-self.temporal_bias_scale * temporal_distances)
+            # 存储时间偏置以供message方法使用
+            self._temporal_bias = temporal_bias
+        else:
+            self._temporal_bias = None
+
         return super(TemporalAdditiveAttention, self).forward(x, edge_index,
                                                               mask=mask)
+
+    def message(self, msg_j: Tensor, msg_i: Tensor, index, size_i,
+                mask_j: OptTensor = None) -> Tensor:
+        msg = self.msg_nn(msg_j + msg_i)
+        gate = self.msg_gate(msg)
+        
+        # 如果有时间距离偏置，将其应用到注意力权重上
+        if self.temporal_distance_bias and hasattr(self, '_temporal_bias'):
+            # temporal_bias: [num_edges], gate: [num_edges, 1] 或 [num_edges]
+            # 确保维度匹配
+            temporal_bias = self._temporal_bias
+            if gate.dim() > 1:
+                # gate: [num_edges, 1]
+                temporal_bias = temporal_bias.unsqueeze(-1)
+            
+            # 将时间偏置加到gate上
+            # 对于softmax归一化，加性偏置会在归一化时起作用
+            # 对于其他归一化方式，也使用加性偏置以保持一致性
+            gate = gate + temporal_bias
+        
+        alpha = self.normalize_weights(gate, index, size_i, mask_j)
+        alpha = F.dropout(alpha, p=self.dropout, training=self.training)
+        out = alpha * msg
+        return out
