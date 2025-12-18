@@ -352,7 +352,7 @@ def run_experiment(args):
 
     additional_model_hparams = dict(n_nodes=dm.n_nodes,
                                     input_size=dm.n_channels,
-                                    u_size=2,
+                                    u_size=1,
                                     output_size=dm.n_channels,
                                     window_size=dm.window)
 

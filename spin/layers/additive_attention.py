@@ -152,6 +152,7 @@ class TemporalAdditiveAttention(AdditiveAttention):
                  dropout: float = 0.0,
                  temporal_distance_bias: bool = True,
                  temporal_bias_scale: float = 1.0,
+                 max_temporal_distance: Optional[int] = None,
                  **kwargs):
         kwargs.setdefault('dim', 1)
         super().__init__(input_size=input_size,
@@ -165,6 +166,7 @@ class TemporalAdditiveAttention(AdditiveAttention):
                          **kwargs)
         self.temporal_distance_bias = temporal_distance_bias
         self.temporal_bias_scale = temporal_bias_scale
+        self.max_temporal_distance = max_temporal_distance
 
     def forward(self, x: PairTensor, mask: OptTensor = None,
                 temporal_mask: OptTensor = None,
@@ -196,7 +198,21 @@ class TemporalAdditiveAttention(AdditiveAttention):
                 j_grid, i_grid = torch.meshgrid([j, i])
             edge_index = torch.stack((j_grid[temporal_mask], i_grid[temporal_mask]))
         else:
-            edge_index = torch.cartesian_prod(j, i).T
+            # 如果没有提供temporal_mask，根据max_temporal_distance限制连接范围
+            if self.max_temporal_distance is not None:
+                # 只连接距离在max_temporal_distance内的时间步
+                try:
+                    # PyTorch >= 1.10.0 支持 indexing 参数
+                    i_grid, j_grid = torch.meshgrid([i, j], indexing='ij')
+                except TypeError:
+                    # 旧版本 PyTorch，需要转置
+                    j_grid, i_grid = torch.meshgrid([j, i])
+                distances = torch.abs(i_grid - j_grid)
+                mask = distances <= self.max_temporal_distance
+                edge_index = torch.stack((j_grid[mask], i_grid[mask]))
+            else:
+                # 如果没有限制，使用全连接（保持向后兼容）
+                edge_index = torch.cartesian_prod(j, i).T
 
         # 计算时间距离偏置：距离越短，偏置越大
         if self.temporal_distance_bias:
@@ -221,25 +237,16 @@ class TemporalAdditiveAttention(AdditiveAttention):
         # 如果有时间距离偏置，将其应用到注意力权重上
         if self.temporal_distance_bias and hasattr(self, '_temporal_bias'):
             # temporal_bias: [num_edges], gate: [num_edges, 1] 或 [num_edges]
-            # 检查维度是否匹配：只有当长度一致时才应用偏置
+            # 确保维度匹配
             temporal_bias = self._temporal_bias
+            if gate.dim() > 1:
+                # gate: [num_edges, 1]
+                temporal_bias = temporal_bias.unsqueeze(-1)
             
-            # 获取 gate 和 temporal_bias 的第一个维度长度（边的数量）
-            gate_num_edges = gate.size(0)
-            bias_num_edges = temporal_bias.size(0)
-            
-            # 只有当边的数量一致时才应用时间偏置
-            if gate_num_edges == bias_num_edges:
-                # 确保维度匹配
-                if gate.dim() > 1:
-                    # gate: [num_edges, 1]
-                    temporal_bias = temporal_bias.unsqueeze(-1)
-                
-                # 将时间偏置加到gate上
-                # 对于softmax归一化，加性偏置会在归一化时起作用
-                # 对于其他归一化方式，也使用加性偏置以保持一致性
-                gate = gate + temporal_bias
-            # 如果维度不匹配，跳过时间偏置（使用原始的 gate）
+            # 将时间偏置加到gate上
+            # 对于softmax归一化，加性偏置会在归一化时起作用
+            # 对于其他归一化方式，也使用加性偏置以保持一致性
+            gate = gate + temporal_bias
         
         alpha = self.normalize_weights(gate, index, size_i, mask_j)
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)

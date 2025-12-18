@@ -26,7 +26,8 @@ class SPINHierarchicalModel(nn.Module):
                  reweight: Optional[str] = 'softmax',
                  update_z_cross: bool = True,
                  norm: bool = True,
-                 spatial_aggr: str = 'add'):
+                 spatial_aggr: str = 'add',
+                 max_temporal_distance: Optional[int] = None):
         super(SPINHierarchicalModel, self).__init__()
 
         u_size = u_size or input_size
@@ -38,6 +39,7 @@ class SPINHierarchicalModel(nn.Module):
         self.z_heads = z_heads
         self.n_layers = n_layers
         self.eta = eta
+        self.max_temporal_distance = max_temporal_distance
 
         self.v = StaticGraphEmbedding(n_nodes, h_size)
         self.lin_v = nn.Linear(h_size, z_size, bias=False)
@@ -73,7 +75,8 @@ class SPINHierarchicalModel(nn.Module):
                 norm=norm,
                 root_weight=True,
                 aggr=spatial_aggr,
-                dropout=0.0
+                dropout=0.0,
+                max_temporal_distance=self.max_temporal_distance
             )
             readout = MLP(h_size, z_size, output_size,
                           n_layers=2)
@@ -154,4 +157,5 @@ class SPINHierarchicalModel(nn.Module):
                         options=[True, False])
         parser.opt_list('--spatial-aggr', type=str, tunable=True,
                         default='add', options=['add', 'softmax'])
+        parser.add_argument('--max-temporal-distance', type=int, default=None)
         return parser
