@@ -20,10 +20,10 @@ data_groups:
     mask: ./data/d210240930_lane_mask.csv
 
 #### Training params ##########################################################
-whiten_prob: [0.2, 0.5, 0.8]
+whiten_prob: [0.0, 0.0, 0.0]
 scale_target: True
 
-epochs: 3  # 最大训练轮数。如果知道想要在哪个epoch停止，直接设置为此值即可
+epochs: 20  # 最大训练轮数。如果知道想要在哪个epoch停止，直接设置为此值即可
 loss_fn: l1_loss
 lr_scheduler: magic
 lr: 0.0008
