@@ -21,8 +21,7 @@ class SPINModel(nn.Module):
                  reweight: Optional[str] = 'softmax',
                  n_layers: int = 4,
                  eta: int = 3,
-                 message_layers: int = 1,
-                 max_temporal_distance: Optional[int] = None):
+                 message_layers: int = 1):
         super(SPINModel, self).__init__()
 
         u_size = u_size or input_size
@@ -31,7 +30,6 @@ class SPINModel(nn.Module):
         self.n_layers = n_layers
         self.eta = eta
         self.temporal_self_attention = temporal_self_attention
-        self.max_temporal_distance = max_temporal_distance
 
         self.u_enc = PositionalEncoder(in_channels=u_size,
                                        out_channels=hidden_size,
@@ -59,8 +57,7 @@ class SPINModel(nn.Module):
                 mask_spatial=l < eta,
                 norm=True,
                 root_weight=True,
-                dropout=0.0,
-                max_temporal_distance=self.max_temporal_distance
+                dropout=0.0
             )
             readout = MLP(hidden_size, hidden_size, output_size,
                           n_layers=2)
@@ -132,5 +129,4 @@ class SPINModel(nn.Module):
         parser.add_argument('--n-layers', type=int, default=4)
         parser.add_argument('--eta', type=int, default=3)
         parser.add_argument('--message-layers', type=int, default=1)
-        parser.add_argument('--max-temporal-distance', type=int, default=None)
         return parser

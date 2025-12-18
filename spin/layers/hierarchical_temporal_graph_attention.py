@@ -22,7 +22,6 @@ class HierarchicalTemporalGraphAttention(MessagePassing):
                  norm: bool = True,
                  dropout: float = 0.,
                  aggr: str = 'add',
-                 max_temporal_distance: Optional[int] = None,
                  **kwargs):
         self.spatial_aggr = aggr
         if aggr == 'softmax':
@@ -42,7 +41,6 @@ class HierarchicalTemporalGraphAttention(MessagePassing):
         self.root_weight = root_weight
         self.norm = norm
         self.dropout = dropout
-        self.max_temporal_distance = max_temporal_distance
         self._z_cross = None
 
         self.zh_self = TemporalAdditiveAttention(
@@ -53,8 +51,7 @@ class HierarchicalTemporalGraphAttention(MessagePassing):
             reweight=reweight,
             dropout=dropout,
             root_weight=True,
-            norm=True,
-            max_temporal_distance=self.max_temporal_distance
+            norm=True
         )
 
         self.hz_self = TemporalAdditiveAttention(
@@ -65,8 +62,7 @@ class HierarchicalTemporalGraphAttention(MessagePassing):
             reweight=reweight,
             dropout=dropout,
             root_weight=True,
-            norm=False,
-            max_temporal_distance=self.max_temporal_distance
+            norm=False
         )
 
         if update_z_cross:
@@ -78,8 +74,7 @@ class HierarchicalTemporalGraphAttention(MessagePassing):
                 reweight=reweight,
                 dropout=dropout,
                 root_weight=True,
-                norm=True,
-                max_temporal_distance=self.max_temporal_distance
+                norm=True
             )
         else:
             self.register_parameter('zh_cross', None)
@@ -92,8 +87,7 @@ class HierarchicalTemporalGraphAttention(MessagePassing):
             reweight=None,
             dropout=dropout,
             root_weight=True,
-            norm=False,
-            max_temporal_distance=self.max_temporal_distance
+            norm=False
         )
 
         if self.spatial_aggr == 'softmax':

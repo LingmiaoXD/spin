@@ -165,27 +165,6 @@ class LaneTrafficDataset(Dataset):
         
         # 从动态数据创建唯一的时间戳索引
         self.timestamps = np.sort(self.dynamic_df[self.time_col].unique())
-        # 如果提供了mask文件，将其中的时间戳并入时间轴，确保mask与数据时间对齐
-        if any(p is not None for p in self.mask_data_paths):
-            mask_times = []
-            for mask_path in self.mask_data_paths:
-                if mask_path is None:
-                    continue
-                mp = Path(mask_path)
-                if not mp.exists():
-                    continue
-                try:
-                    mask_df = pd.read_csv(mp)
-                    if self.mask_time_col in mask_df.columns:
-                        mask_times.extend(mask_df[self.mask_time_col].unique().tolist())
-                except Exception as e:
-                    print(f"⚠️ 警告: 读取掩码文件时间列失败 {mp}: {e}")
-            if mask_times:
-                union_times = np.unique(np.concatenate([self.timestamps, np.array(mask_times)]))
-                if len(union_times) != len(self.timestamps):
-                    added = len(union_times) - len(self.timestamps)
-                    print(f"✅ 已将掩码文件中的 {added} 个时间戳并入时间轴，保证与mask对齐")
-                self.timestamps = union_times
         
         # 从静态数据创建唯一的lane_id索引
         self.lane_ids = np.array([node[self.lane_id_col] for node in self.static_nodes])
@@ -291,9 +270,9 @@ class LaneTrafficDataset(Dataset):
                         elif conn_type == 'near':
                             weight = 0.5
                         elif conn_type == 'crossing':
-                            weight = 0.5
+                            weight = 0.3
                         else:
-                            weight = 0.5
+                            weight = 0.1
                         
                         # 添加双向连接
                         adj_matrix[source_idx, target_idx] = max(adj_matrix[source_idx, target_idx], weight)
@@ -401,26 +380,17 @@ class LaneTrafficDataset(Dataset):
         return self.data
         
     def datetime_encoded(self, encoding: List[str]) -> pd.DataFrame:
-        """
-        获取时间编码 - 使用真实时间差（不做 sin/cos），并保留相对进度
-
-        返回两列：
-        - time_linear: 相对进度 [0,1]
-        - delta_t: 相邻时间步的真实时间差（与原始时间戳同单位），首个时间步置 0
-        """
+        """获取时间编码 - 适用于短时间尺度连续数据"""
         n_times = len(self.timestamps)
         df = pd.DataFrame(index=range(n_times))
-
+        
         # 归一化时间位置 [0, 1]
         t_min, t_max = self.timestamps.min(), self.timestamps.max()
         normalized_t = (self.timestamps - t_min) / (t_max - t_min + 1e-8)
+        
+        # 线性时间位置
         df['time_linear'] = normalized_t
-
-        # 真实时间差特征（首步为 0）
-        ts = self.timestamps.astype(float)
-        delta = np.diff(ts, prepend=ts[0])
-        df['delta_t'] = delta
-
+        
         return df
         
     def get_splitter(self, val_len: float = None, test_len: float = None):

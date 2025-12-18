@@ -22,7 +22,6 @@ class TemporalGraphAdditiveAttention(MessagePassing):
                  mask_spatial: bool = True,
                  norm: bool = True,
                  dropout: float = 0.,
-                 max_temporal_distance: Optional[int] = None,
                  **kwargs):
         kwargs.setdefault('aggr', 'add')
         super(TemporalGraphAdditiveAttention, self).__init__(node_dim=-2,
@@ -41,7 +40,6 @@ class TemporalGraphAdditiveAttention(MessagePassing):
 
         self.root_weight = root_weight
         self.dropout = dropout
-        self.max_temporal_distance = max_temporal_distance
 
         if temporal_self_attention:
             self.self_attention = TemporalAdditiveAttention(
@@ -52,23 +50,19 @@ class TemporalGraphAdditiveAttention(MessagePassing):
                 reweight=reweight,
                 dropout=dropout,
                 root_weight=False,
-                norm=False,
-                max_temporal_distance=self.max_temporal_distance
+                norm=False
             )
         else:
             self.register_parameter('self_attention', None)
 
-        self.cross_attention = TemporalAdditiveAttention(
-            input_size=input_size,
-            output_size=output_size,
-            msg_size=msg_size,
-            msg_layers=msg_layers,
-            reweight=reweight,
-            dropout=dropout,
-            root_weight=False,
-            norm=False,
-            max_temporal_distance=self.max_temporal_distance
-        )
+        self.cross_attention = TemporalAdditiveAttention(input_size=input_size,
+                                                         output_size=output_size,
+                                                         msg_size=msg_size,
+                                                         msg_layers=msg_layers,
+                                                         reweight=reweight,
+                                                         dropout=dropout,
+                                                         root_weight=False,
+                                                         norm=False)
 
         if self.root_weight:
             self.lin_skip = Linear(self.tgt_size, self.output_size,

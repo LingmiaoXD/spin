@@ -44,4 +44,3 @@ n_layers: 3
 message_layers: 1
 temporal_self_attention: True
 reweight: 'softmax'
-max_temporal_distance: 5  # 时间步最大连接距离，None 表示全连接
