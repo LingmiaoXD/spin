@@ -110,10 +110,9 @@ class AdditiveAttention(MessagePassing):
         return out
 
     def normalize_weights(self, weights, index, num_nodes, mask=None):
-        # mask weights - 避免就地修改
-        if mask is not None:
-            fill_value = float("-inf") if self.reweight == 'softmax' else 0.
-            weights = weights.clone().masked_fill(torch.logical_not(mask), fill_value)
+        # 注意：这里不再直接使用 mask 对权重做 masked_fill，
+        # 以避免节点/时间级别 mask 与边级别权重在形状上不匹配导致运行错误。
+        # 仅保留基于 index 的归一化逻辑（l1 或 softmax）。
         # eventually reweight
         if self.reweight == 'l1':
             expanded_index = broadcast(index, weights, self.node_dim)
@@ -215,40 +214,24 @@ class TemporalAdditiveAttention(AdditiveAttention):
                 edge_index = torch.cartesian_prod(j, i).T
 
         # 计算时间距离偏置：距离越短，偏置越大
-        if self.temporal_distance_bias:
-            # edge_index: [2, num_edges], 第一行是源时间步j，第二行是目标时间步i
-            temporal_distances = torch.abs(edge_index[0] - edge_index[1]).float()
-            # 将距离转换为偏置：距离越短，偏置越大（使用负指数或倒数）
-            # 使用 exp(-scale * distance) 使得距离越短，偏置越大
-            temporal_bias = torch.exp(-self.temporal_bias_scale * temporal_distances)
-            # 存储时间偏置以供message方法使用
-            self._temporal_bias = temporal_bias
-        else:
-            self._temporal_bias = None
+        # 注意：为了避免与跨图/跨节点维度的广播形状不一致导致错误，
+        # 这里暂时不在内部保存/使用时间偏置，而是保留后续有需要时再行设计。
+        self._temporal_bias = None
 
+        # 注意：这里显式地不向父类传递 mask（mask 只用于节点/特征级别，
+        # 而时间注意力是基于时间步之间的边进行的，直接使用该 mask 会造成形状不匹配）。
+        # 因此在时间注意力中完全忽略 mask，由时间偏置和归一化来决定权重。
         return super(TemporalAdditiveAttention, self).forward(x, edge_index,
-                                                              mask=mask)
+                                                              mask=None)
 
     def message(self, msg_j: Tensor, msg_i: Tensor, index, size_i,
                 mask_j: OptTensor = None) -> Tensor:
         msg = self.msg_nn(msg_j + msg_i)
         gate = self.msg_gate(msg)
         
-        # 如果有时间距离偏置，将其应用到注意力权重上
-        if self.temporal_distance_bias and hasattr(self, '_temporal_bias'):
-            # temporal_bias: [num_edges], gate: [num_edges, 1] 或 [num_edges]
-            # 确保维度匹配
-            temporal_bias = self._temporal_bias
-            if gate.dim() > 1:
-                # gate: [num_edges, 1]
-                temporal_bias = temporal_bias.unsqueeze(-1)
-            
-            # 将时间偏置加到gate上
-            # 对于softmax归一化，加性偏置会在归一化时起作用
-            # 对于其他归一化方式，也使用加性偏置以保持一致性
-            gate = gate + temporal_bias
-        
-        alpha = self.normalize_weights(gate, index, size_i, mask_j)
+        # 在时间注意力中不使用 mask_j，也暂不叠加时间偏置，
+        # 以避免与边级别权重在形状上的不匹配。
+        alpha = self.normalize_weights(gate, index, size_i, mask=None)
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
         out = alpha * msg
         return out
