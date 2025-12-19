@@ -136,6 +136,10 @@ class LaneTrafficDataset(Dataset):
         self.dynamic_df = pd.DataFrame()
         self.mask_data_paths = []  # 保存所有mask路径供后续使用
         
+        # 用于记录时间戳偏移量，避免不同文件的时间戳冲突
+        time_offset = 0.0
+        max_timestamp_so_far = None
+        
         for i, group in enumerate(self.data_groups):
             print(f"\n📂 加载第 {i+1}/{len(self.data_groups)} 组数据...")
             
@@ -157,18 +161,60 @@ class LaneTrafficDataset(Dataset):
             dynamic_path = Path(group['dynamic'])
             if dynamic_path.suffix == '.csv':
                 df = pd.read_csv(dynamic_path)
+                
+                # 检查时间戳列是否存在
+                if self.time_col not in df.columns:
+                    raise ValueError(f"动态数据文件 {dynamic_path} 缺少时间列: {self.time_col}")
+                
+                # 获取当前文件的时间戳范围
+                current_times = df[self.time_col].values
+                current_min_time = np.min(current_times)
+                current_max_time = np.max(current_times)
+                time_span = current_max_time - current_min_time
+                
+                # 初始化当前文件的偏移量（第一个文件为0）
+                current_file_offset = 0.0
+                
+                # 如果这不是第一个文件，且时间戳有重叠风险，则添加偏移量
+                if i > 0 and max_timestamp_so_far is not None:
+                    # 计算偏移量：之前最大时间戳 + 时间间隔 + 1（确保不重叠）
+                    # 时间间隔取当前文件的时间跨度，或者如果无法确定则使用一个较大的值
+                    if time_span > 0:
+                        # 使用当前文件的时间跨度作为间隔
+                        time_gap = time_span * 0.1  # 添加10%的间隔作为缓冲
+                    else:
+                        # 如果时间跨度为0（所有时间戳相同），使用一个固定间隔
+                        time_gap = 1.0
+                    
+                    current_file_offset = max_timestamp_so_far + time_gap + 1.0
+                    print(f"   ⏰ 检测到时间戳冲突风险，为文件 {i+1} 添加时间偏移量: {current_file_offset:.2f}")
+                
+                # 应用时间偏移量
+                df[self.time_col] = df[self.time_col] + current_file_offset
+                
+                # 更新最大时间戳
+                current_max_time_adjusted = current_max_time + current_file_offset
+                if max_timestamp_so_far is None:
+                    max_timestamp_so_far = current_max_time_adjusted
+                else:
+                    max_timestamp_so_far = max(max_timestamp_so_far, current_max_time_adjusted)
+                
                 self.dynamic_df = pd.concat([self.dynamic_df, df], ignore_index=True)
-                print(f"   ✅ 动态数据: {df.shape[0]} 条记录")
+                print(f"   ✅ 动态数据: {df.shape[0]} 条记录 (时间范围: {current_min_time + current_file_offset:.2f} ~ {current_max_time_adjusted:.2f})")
             else:
                 raise ValueError(f"动态数据文件应为CSV格式: {dynamic_path.suffix}")
             
-            # 3. 保存mask路径
+            # 3. 保存mask路径（同时保存对应的时间偏移量信息）
             mask_path = group.get('mask')
-            self.mask_data_paths.append(mask_path)
+            self.mask_data_paths.append({
+                'path': mask_path,
+                'time_offset': current_file_offset  # 保存该文件对应的时间偏移量
+            })
         
         print(f"\n📊 合并后总计:")
         print(f"   静态节点: {len(self.static_nodes)} 个")
         print(f"   动态记录: {self.dynamic_df.shape[0]} 条")
+        print(f"   时间戳范围: {self.dynamic_df[self.time_col].min():.2f} ~ {self.dynamic_df[self.time_col].max():.2f}")
         
         # 4. 验证数据一致性
         static_lane_ids = set(node[self.lane_id_col] for node in self.static_nodes)
@@ -188,9 +234,12 @@ class LaneTrafficDataset(Dataset):
         # 从动态数据创建唯一的时间戳索引
         self.timestamps = np.sort(self.dynamic_df[self.time_col].unique())
         # 如果提供了mask文件，将其中的时间戳并入时间轴，确保mask与数据时间对齐
-        if any(p is not None for p in self.mask_data_paths):
+        if any(mp.get('path') is not None for mp in self.mask_data_paths):
             mask_times = []
-            for mask_path in self.mask_data_paths:
+            for mask_info in self.mask_data_paths:
+                mask_path = mask_info.get('path') if isinstance(mask_info, dict) else mask_info
+                time_offset = mask_info.get('time_offset', 0.0) if isinstance(mask_info, dict) else 0.0
+                
                 if mask_path is None:
                     continue
                 mp = Path(mask_path)
@@ -199,7 +248,9 @@ class LaneTrafficDataset(Dataset):
                 try:
                     mask_df = pd.read_csv(mp)
                     if self.mask_time_col in mask_df.columns:
-                        mask_times.extend(mask_df[self.mask_time_col].unique().tolist())
+                        # 应用相同的时间偏移量
+                        mask_times_adjusted = mask_df[self.mask_time_col].values + time_offset
+                        mask_times.extend(mask_times_adjusted.tolist())
                 except Exception as e:
                     print(f"⚠️ 警告: 读取掩码文件时间列失败 {mp}: {e}")
             if mask_times:
@@ -387,7 +438,8 @@ class LaneTrafficDataset(Dataset):
         n_times, n_lanes, n_features = self.data.shape
         
         # 检查是否有任何mask文件
-        has_masks = any(p is not None for p in self.mask_data_paths)
+        has_masks = any(mp.get('path') is not None if isinstance(mp, dict) else mp is not None 
+                       for mp in self.mask_data_paths)
         
         if has_masks:
             self._load_user_masks()
@@ -422,7 +474,15 @@ class LaneTrafficDataset(Dataset):
         time_to_idx = {t: idx for idx, t in enumerate(self.timestamps)}
         
         # 加载所有mask文件
-        for i, mask_path in enumerate(self.mask_data_paths):
+        for i, mask_info in enumerate(self.mask_data_paths):
+            # 处理新的数据结构（字典）或旧的数据结构（字符串）
+            if isinstance(mask_info, dict):
+                mask_path = mask_info.get('path')
+                time_offset = mask_info.get('time_offset', 0.0)
+            else:
+                mask_path = mask_info
+                time_offset = 0.0
+            
             if mask_path is None:
                 continue
                 
@@ -431,7 +491,7 @@ class LaneTrafficDataset(Dataset):
                 print(f"⚠️ 警告: 掩码文件不存在，跳过: {mask_path}")
                 continue
             
-            print(f"   加载掩码文件 {i+1}: {mask_path}")
+            print(f"   加载掩码文件 {i+1}: {mask_path} (时间偏移量: {time_offset:.2f})")
             mask_df = pd.read_csv(mask_path)
             
             # 检查必需列
@@ -439,6 +499,10 @@ class LaneTrafficDataset(Dataset):
             missing_cols = [col for col in required_cols if col not in mask_df.columns]
             if missing_cols:
                 raise ValueError(f"掩码文件 {mask_path} 缺少必需列: {missing_cols}")
+            
+            # 应用时间偏移量到mask文件的时间戳
+            mask_df = mask_df.copy()
+            mask_df[self.mask_time_col] = mask_df[self.mask_time_col] + time_offset
             
             # 填充掩码
             for _, row in mask_df.iterrows():
@@ -452,6 +516,9 @@ class LaneTrafficDataset(Dataset):
                 if time_idx is not None and lane_idx is not None:
                     # 对所有特征都使用相同的掩码
                     self.training_mask[time_idx, lane_idx, :] = is_observed
+                elif time_idx is None:
+                    # 时间戳不在时间轴中，可能是mask文件的时间戳范围超出了数据范围
+                    pass  # 静默忽略，因为时间戳可能已经在合并时处理过了
         
         # 评估掩码是训练掩码的反
         self.eval_mask = ~self.training_mask

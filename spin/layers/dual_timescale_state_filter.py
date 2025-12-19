@@ -46,3 +46,4 @@ class DTStateFilter(nn.Module):
         self.z.copy_(z_new)
         # 返回克隆以避免下游意外地原地修改
         return self.z.clone()
+
