@@ -34,8 +34,7 @@ class LaneTrafficDataset(Dataset):
     
     # 默认特征列（可配置）
     DEFAULT_FEATURE_COLS = [
-        'avg_speed', 'avg_occupancy', 'total_vehicles', 
-        'car_ratio', 'medium_ratio', 'heavy_ratio', 'motorcycle_ratio'
+        'avg_speed', 'avg_occupancy', 'total_vehicles'
     ]
     
     def __init__(self, 
