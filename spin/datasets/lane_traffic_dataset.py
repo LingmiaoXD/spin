@@ -15,6 +15,7 @@ from tsl.data import SpatioTemporalDataset
 from tsl.data.preprocessing import StandardScaler
 from tsl.ops.connectivity import adj_to_edge_index
 from tsl.utils.python_utils import ensure_list
+from ..layers import DTStateFilter
 
 
 class LaneTrafficDataset(Dataset):
@@ -53,7 +54,18 @@ class LaneTrafficDataset(Dataset):
                  val_len: float = 0.1,
                  test_len: float = 0.2,
                  impute_nans: bool = True,
-                 fill_value: float = 0.0,
+                 fill_value: float = 0.0, # 缺失值填充值
+                 enable_dtsf: bool = True, # 是否启用双时间尺度拥堵隐状态
+                 dtsf_gamma: float = 0.7, # 双时间尺度拥堵隐状态的gamma参数，越接近 1，历史状态占比越大，曲线越平滑、反应越慢
+                 dtsf_delta: float = 5.0, # 双时间尺度拥堵隐状态的delta参数
+                 dtsf_vth_ratio: float = 0.8, # 双时间尺度拥堵隐状态的vth_ratio参数，当速度低于基础速度的这个值左右就开始被认为是拥堵。
+                 dtsf_initial_z: float = 1.0, # 双时间尺度拥堵隐状态的初始拥堵状态参数
+                 dtsf_v_base_init: float = 45.0, # 双时间尺度拥堵隐状态的v_base_init参数，基础速度的初始值
+                 dtsf_no_car_value: Optional[float] = None,
+                 dtsf_auto_no_car: bool = True, # 是否自动识别“无车”标记值
+                 dtsf_treat_no_car_as_missing: bool = True, # 是否将“无车”标记值视为缺失值
+                 dtsf_no_car_eps: float = 1e-3, # “无车”标记值的epsilon参数
+                 dtsf_device: str = 'cuda', # 双时间尺度拥堵隐状态的设备参数
                  **kwargs):
         """
         初始化车道级交通数据集
@@ -103,6 +115,17 @@ class LaneTrafficDataset(Dataset):
         self.test_len = test_len
         self.impute_nans = impute_nans
         self.fill_value = fill_value
+        self.enable_dtsf = enable_dtsf
+        self.dtsf_gamma = dtsf_gamma
+        self.dtsf_delta = dtsf_delta
+        self.dtsf_vth_ratio = dtsf_vth_ratio
+        self.dtsf_initial_z = dtsf_initial_z
+        self.dtsf_v_base_init = dtsf_v_base_init
+        self.dtsf_no_car_value = dtsf_no_car_value
+        self.dtsf_auto_no_car = dtsf_auto_no_car
+        self.dtsf_treat_no_car_as_missing = dtsf_treat_no_car_as_missing
+        self.dtsf_no_car_eps = dtsf_no_car_eps
+        self.dtsf_device = dtsf_device
         
         # 加载和预处理数据
         self._load_data()
@@ -241,6 +264,10 @@ class LaneTrafficDataset(Dataset):
         # 处理缺失值
         nan_ratio = np.isnan(self.data).mean()
         print(f"原始缺失值比例: {nan_ratio:.3f}")
+
+        # 在填充缺失值前先基于原始速度序列构造 DTSF 拥堵状态
+        if self.enable_dtsf:
+            self._append_dtsf_state()
         
         if self.impute_nans:
             # 使用前向填充
@@ -252,6 +279,59 @@ class LaneTrafficDataset(Dataset):
                 
         print(f"数据矩阵形状: {self.data.shape}")
         print(f"填充后缺失值比例: {np.isnan(self.data).mean():.3f}")
+
+    def _append_dtsf_state(self):
+        """基于 avg_speed 计算双时间尺度拥堵隐状态并追加为新特征"""
+        if 'avg_speed' not in self.feature_cols:
+            print("⚠️ DTSF 跳过：未找到 avg_speed 特征列")
+            return
+
+        speed_idx = self.feature_cols.index('avg_speed')
+        speed_matrix = self.data[..., speed_idx]
+
+        if np.isnan(speed_matrix).all():
+            print("⚠️ DTSF 跳过：avg_speed 全为缺失")
+            return
+
+        # 自动识别“无车”标记值（针对 0~1 归一化且无车=1 的场景）
+        no_car_value = self.dtsf_no_car_value
+        if self.dtsf_auto_no_car and no_car_value is None:
+            finite_max = np.nanmax(speed_matrix)
+            if finite_max <= 1.5:  # 归一化速度的典型上界
+                no_car_value = 1.0
+
+        z_state = np.zeros_like(speed_matrix, dtype=np.float32)
+        n_times, n_lanes = speed_matrix.shape
+
+        for lane_idx in range(n_lanes):
+            lane_speed = speed_matrix[:, lane_idx]
+            valid_vals = lane_speed[~np.isnan(lane_speed)]
+            v_base_init = float(valid_vals[0]) if valid_vals.size > 0 else self.dtsf_v_base_init
+
+            filter_module = DTStateFilter(
+                gamma=self.dtsf_gamma,
+                delta=self.dtsf_delta,
+                vth_ratio=self.dtsf_vth_ratio,
+                v_base_init=v_base_init,
+                initial_z=self.dtsf_initial_z,
+                device=self.dtsf_device,
+            )
+
+            with torch.no_grad():
+                for t, v in enumerate(lane_speed):
+                    v_obs = None
+                    if not np.isnan(v):
+                        is_no_car = False
+                        if self.dtsf_treat_no_car_as_missing and no_car_value is not None:
+                            is_no_car = v >= (no_car_value - self.dtsf_no_car_eps)
+                        if not is_no_car:
+                            v_obs = float(v)
+                    z_val = filter_module(v_obs)
+                    z_state[t, lane_idx] = float(z_val.detach().cpu())
+
+        self.data = np.concatenate([self.data, z_state[..., None]], axis=-1)
+        self.feature_cols.append('dtsf_congestion')
+        print("✅ 已添加 DTSF 拥堵状态特征，当前特征数:", len(self.feature_cols))
         
     def _build_graph_connectivity(self):
         """构建基于节点连接规则的图连接"""

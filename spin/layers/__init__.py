@@ -4,3 +4,4 @@ from .temporal_graph_additive_attention import TemporalAdditiveAttention, \
     TemporalGraphAdditiveAttention
 from .hierarchical_temporal_graph_attention import \
     HierarchicalTemporalGraphAttention
+from .dual_timescale_state_filter import DTStateFilter
