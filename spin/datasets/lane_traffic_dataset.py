@@ -331,23 +331,37 @@ class LaneTrafficDataset(Dataset):
         print(f"填充后缺失值比例: {np.isnan(self.data).mean():.3f}")
 
     def _append_dtsf_state(self):
-        """基于 avg_speed 计算双时间尺度拥堵隐状态并追加为新特征"""
+        """基于 avg_speed 计算双时间尺度拥堵隐状态并追加为新特征
+        
+        注意：如果 avg_speed 是绝对速度值（km/h），在计算 DTSF 后会自动归一化到 0-1 范围
+        以与其他归一化特征保持一致的尺度
+        """
         if 'avg_speed' not in self.feature_cols:
             print("⚠️ DTSF 跳过：未找到 avg_speed 特征列")
             return
 
         speed_idx = self.feature_cols.index('avg_speed')
-        speed_matrix = self.data[..., speed_idx]
+        speed_matrix = self.data[..., speed_idx].copy()  # 保存原始速度值用于 DTSF 计算
 
         if np.isnan(speed_matrix).all():
             print("⚠️ DTSF 跳过：avg_speed 全为缺失")
             return
 
-        # 自动识别“无车”标记值（针对 0~1 归一化且无车=1 的场景）
+        # 检测速度值是否已经是归一化的（0-1范围）还是绝对速度值（km/h）
+        finite_vals = speed_matrix[~np.isnan(speed_matrix)]
+        if finite_vals.size > 0:
+            speed_max = np.nanmax(speed_matrix)
+            speed_min = np.nanmin(speed_matrix)
+            is_normalized = speed_max <= 1.5  # 如果最大值小于等于1.5，认为是归一化的
+        else:
+            is_normalized = True  # 如果全为NaN，默认认为是归一化的
+            speed_max = 1.0
+            speed_min = 0.0
+
+        # 自动识别"无车"标记值（针对 0~1 归一化且无车=1 的场景）
         no_car_value = self.dtsf_no_car_value
         if self.dtsf_auto_no_car and no_car_value is None:
-            finite_max = np.nanmax(speed_matrix)
-            if finite_max <= 1.5:  # 归一化速度的典型上界
+            if is_normalized:
                 no_car_value = 1.0
 
         z_state = np.zeros_like(speed_matrix, dtype=np.float32)
@@ -379,8 +393,24 @@ class LaneTrafficDataset(Dataset):
                     z_val = filter_module(v_obs)
                     z_state[t, lane_idx] = float(z_val.detach().cpu())
 
+        # 添加 DTSF 状态特征
         self.data = np.concatenate([self.data, z_state[..., None]], axis=-1)
         self.feature_cols.append('dtsf_congestion')
+        
+        # 如果 avg_speed 是绝对速度值（非归一化），需要归一化到 0-1 范围
+        # 以与其他归一化特征保持一致的尺度，避免 StandardScaler 标准化时尺度差异过大
+        if not is_normalized and finite_vals.size > 0:
+            # 使用 min-max 归一化：将速度值归一化到 [0, 1] 范围
+            # 使用全局的最大最小值，确保所有车道使用相同的归一化参数
+            speed_range = speed_max - speed_min
+            if speed_range > 1e-6:  # 避免除零
+                normalized_speed = (speed_matrix - speed_min) / speed_range
+                # 更新数据矩阵中的 avg_speed 值
+                self.data[..., speed_idx] = normalized_speed
+                print(f"✅ 已将 avg_speed 从绝对速度值 ({speed_min:.2f}-{speed_max:.2f} km/h) 归一化到 [0, 1] 范围")
+            else:
+                print(f"⚠️ avg_speed 值范围过小 ({speed_min:.2f}-{speed_max:.2f})，跳过归一化")
+        
         print("✅ 已添加 DTSF 拥堵状态特征，当前特征数:", len(self.feature_cols))
         
     def _build_graph_connectivity(self):
