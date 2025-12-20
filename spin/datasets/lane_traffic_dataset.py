@@ -126,6 +126,9 @@ class LaneTrafficDataset(Dataset):
         self.dtsf_no_car_eps = dtsf_no_car_eps
         self.dtsf_device = dtsf_device
         
+        # 保存归一化参数（用于推理时反归一化）
+        self.speed_normalization_params = None  # {'speed_min': float, 'speed_max': float, 'is_normalized': bool}
+        
         # 加载和预处理数据
         self._load_data()
         self._preprocess_data()
@@ -407,9 +410,25 @@ class LaneTrafficDataset(Dataset):
                 normalized_speed = (speed_matrix - speed_min) / speed_range
                 # 更新数据矩阵中的 avg_speed 值
                 self.data[..., speed_idx] = normalized_speed
+                # 保存归一化参数，用于推理时反归一化
+                self.speed_normalization_params = {
+                    'speed_min': float(speed_min),
+                    'speed_max': float(speed_max),
+                    'is_normalized': False,
+                    'feature_idx': speed_idx
+                }
                 print(f"✅ 已将 avg_speed 从绝对速度值 ({speed_min:.2f}-{speed_max:.2f} km/h) 归一化到 [0, 1] 范围")
+                print(f"   已保存归一化参数: min={speed_min:.2f}, max={speed_max:.2f} km/h")
             else:
                 print(f"⚠️ avg_speed 值范围过小 ({speed_min:.2f}-{speed_max:.2f})，跳过归一化")
+        else:
+            # 如果已经是归一化的，也保存参数（虽然不需要反归一化）
+            self.speed_normalization_params = {
+                'speed_min': 0.0,
+                'speed_max': 1.0,
+                'is_normalized': True,
+                'feature_idx': speed_idx
+            }
         
         print("✅ 已添加 DTSF 拥堵状态特征，当前特征数:", len(self.feature_cols))
         

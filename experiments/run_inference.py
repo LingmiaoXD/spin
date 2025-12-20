@@ -332,6 +332,24 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
         else:
             y_hat = y_hat_inv
     
+    # 反归一化 avg_speed（如果数据集保存了归一化参数）
+    # 注意：StandardScaler 反标准化后得到的是归一化后的值（0-1），
+    # 如果原始 avg_speed 是绝对速度值，需要反归一化回原始范围
+    if hasattr(dataset, 'speed_normalization_params') and dataset.speed_normalization_params is not None:
+        norm_params = dataset.speed_normalization_params
+        if not norm_params.get('is_normalized', True):  # 如果原始值不是归一化的
+            speed_idx = norm_params.get('feature_idx')
+            if speed_idx is not None and speed_idx < y_hat.shape[-1]:
+                speed_min = norm_params['speed_min']
+                speed_max = norm_params['speed_max']
+                speed_range = speed_max - speed_min
+                if speed_range > 1e-6:
+                    # 反归一化：从 [0, 1] 恢复到 [speed_min, speed_max]
+                    y_hat[..., speed_idx] = y_hat[..., speed_idx] * speed_range + speed_min
+                    print(f"✅ 已将 avg_speed 从归一化值 [0, 1] 反归一化回绝对速度值 [{speed_min:.2f}, {speed_max:.2f}] km/h")
+                else:
+                    print(f"⚠️ 速度范围过小，跳过反归一化")
+    
     # 获取测试集的索引
     if test_indices is None:
         # 如果test_indices为None，使用默认的splitter参数
