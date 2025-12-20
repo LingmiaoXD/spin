@@ -23,7 +23,7 @@ data_groups:
 whiten_prob: [0.0, 0.0, 0.0]
 scale_target: True
 
-epochs: 20  # 最大训练轮数。如果知道想要在哪个epoch停止，直接设置为此值即可
+epochs: 6  # 最大训练轮数。如果知道想要在哪个epoch停止，直接设置为此值即可
 loss_fn: l1_loss
 lr_scheduler: magic
 lr: 0.0008
