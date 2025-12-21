@@ -43,3 +43,5 @@ n_layers: 2  # LSTM层数
 dropout: 0.1  # Dropout比率
 bidirectional: False  # 是否使用双向LSTM
 
+
+
