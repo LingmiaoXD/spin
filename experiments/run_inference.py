@@ -401,6 +401,24 @@ def save_imputed_results_lane(y_hat, dataset, dm, output_path,
         full_data = dataset.data.copy()  # [time, nodes, features]
         training_mask = dataset.training_mask.copy()  # [time, nodes, features]
     
+    # 对 full_data 中的 avg_speed 也进行反归一化（如果被归一化了）
+    # 注意：dataset.data 中的 avg_speed 在预处理时可能已被归一化到 [0, 1]
+    # 需要将其反归一化回原始绝对速度值，以保持输出结果的一致性
+    # 这样已知值位置的值就是原始值，而不是归一化后的值
+    if hasattr(dataset, 'speed_normalization_params') and dataset.speed_normalization_params is not None:
+        norm_params = dataset.speed_normalization_params
+        if not norm_params.get('is_normalized', True):  # 如果原始值不是归一化的
+            speed_idx = norm_params.get('feature_idx')
+            if speed_idx is not None and speed_idx < full_data.shape[-1]:
+                speed_min = norm_params['speed_min']
+                speed_max = norm_params['speed_max']
+                speed_range = speed_max - speed_min
+                if speed_range > 1e-6:
+                    # 反归一化：从 [0, 1] 恢复到 [speed_min, speed_max]
+                    # 直接对整个 speed_idx 特征进行反归一化
+                    full_data[..., speed_idx] = full_data[..., speed_idx] * speed_range + speed_min
+                    print(f"✅ 已将 full_data 中的 avg_speed 从归一化值 [0, 1] 反归一化回绝对速度值 [{speed_min:.2f}, {speed_max:.2f}] km/h")
+    
     # 将窗口化的预测结果映射回完整时间序列
     # 注意：window和stride已经在前面获取了
     # y_hat 的形状是 [num_windows, window, nodes, features] 或 [num_windows * window, nodes, features]
