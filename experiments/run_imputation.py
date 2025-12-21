@@ -25,8 +25,8 @@ from tsl.ops.imputation import add_missing_values
 from tsl.utils import parser_utils, numpy_metrics
 from tsl.utils.parser_utils import ArgParser
 
-from spin.baselines import SAITS, TransformerModel, BRITS
-from spin.imputers import SPINImputer, SAITSImputer, BRITSImputer
+from spin.baselines import SAITS, TransformerModel, BRITS, LSTMModel
+from spin.imputers import SPINImputer, SAITSImputer, BRITSImputer, LSTMImputer
 from spin.models import SPINModel, SPINHierarchicalModel
 from spin.scheduler import CosineSchedulerWithRestarts
 from spin.datasets.lane_traffic_dataset import LaneTrafficDataset
@@ -45,6 +45,8 @@ def get_model_classes(model_str):
         model, filler = TransformerModel, SPINImputer
     elif model_str == 'brits':
         model, filler = BRITS, BRITSImputer
+    elif model_str == 'lstm':
+        model, filler = LSTMModel, LSTMImputer
     else:
         raise ValueError(f'Model {model_str} not available.')
     return model, filler
@@ -260,6 +262,7 @@ def run_experiment(args):
 
     # script flags
     is_spin = args.model_name in ['spin', 'spin_h']
+    is_lstm = args.model_name == 'lstm'
 
     model_cls, imputer_class = get_model_classes(args.model_name)
     
@@ -320,6 +323,9 @@ def run_experiment(args):
         from tsl.ops.connectivity import adj_to_edge_index
         edge_index, edge_weight = adj_to_edge_index(adj)
         connectivity = (edge_index, edge_weight)
+    elif is_lstm:
+        # LSTM不需要图结构，但为了兼容性，可以设置为None
+        connectivity = None
     else:
         connectivity = None
 

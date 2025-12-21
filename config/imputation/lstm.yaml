@@ -1,0 +1,45 @@
+##########################        LSTM CONFIG        ##########################
+
+#### Dataset params ###########################################################
+dataset_name: lane
+val_len: 0.1
+
+window: 10
+stride: 1
+
+# 多组数据配置
+data_groups:
+  - static: ./data/graph_40m.json
+    dynamic: ./data/d210240830_lane_node_stats.csv
+    mask: ./data/d210240830_lane_mask.csv
+  - static: ./data/graph_40m.json
+    dynamic: ./data/d210240900_lane_node_stats.csv
+    mask: ./data/d210240900_lane_mask.csv
+  - static: ./data/graph_40m.json
+    dynamic: ./data/d210240930_lane_node_stats.csv
+    mask: ./data/d210240930_lane_mask.csv
+
+#### Training params ##########################################################
+whiten_prob: [0.0, 0.0, 0.0]
+scale_target: True
+
+epochs: 6  # 最大训练轮数
+loss_fn: l1_loss
+lr_scheduler: magic
+lr: 0.001
+patience: 5  # 早停耐心值：验证集MAE连续N个epoch没有改善就停止
+min_delta: 0.001  # 早停的最小改善阈值
+l2_reg: 0.0001  # L2正则化
+precision: 32
+batch_size: 4
+split_batch_in: 2
+batches_epoch: 300
+gradient_checkpointing: False
+
+#### Model params #############################################################
+model_name: 'lstm'
+hidden_size: 64  # LSTM隐藏层维度
+n_layers: 2  # LSTM层数
+dropout: 0.1  # Dropout比率
+bidirectional: False  # 是否使用双向LSTM
+

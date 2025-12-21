@@ -24,8 +24,8 @@ from tsl.ops.imputation import add_missing_values, sample_mask
 from tsl.utils import ArgParser, parser_utils, numpy_metrics
 from tsl.utils.python_utils import ensure_list
 
-from spin.baselines import SAITS, TransformerModel, BRITS
-from spin.imputers import SPINImputer, SAITSImputer, BRITSImputer
+from spin.baselines import SAITS, TransformerModel, BRITS, LSTMModel
+from spin.imputers import SPINImputer, SAITSImputer, BRITSImputer, LSTMImputer
 from spin.models import SPINModel, SPINHierarchicalModel
 from spin.datasets.lane_traffic_dataset import LaneTrafficDataset
 
@@ -43,6 +43,8 @@ def get_model_classes(model_str):
         model, filler = TransformerModel, SPINImputer
     elif model_str == 'brits':
         model, filler = BRITS, BRITSImputer
+    elif model_str == 'lstm':
+        model, filler = LSTMModel, LSTMImputer
     else:
         raise ValueError(f'Model {model_str} not available.')
     return model, filler
@@ -677,6 +679,7 @@ def run_experiment(args):
 
     # script flags
     is_spin = args.model_name in ['spin', 'spin_h']
+    is_lstm = args.model_name == 'lstm'
 
     ########################################
     # load config                          #
