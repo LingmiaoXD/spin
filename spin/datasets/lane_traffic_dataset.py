@@ -220,10 +220,14 @@ class LaneTrafficDataset(Dataset):
                 raise ValueError(f"动态数据文件应为CSV格式: {dynamic_path.suffix}")
             
             # 3. 保存dynamic文件信息（用于匹配mask文件）
+            # 同时记录该文件的时间戳范围（已应用偏移量），用于后续确定文件边界
+            file_min_time = current_min_time + current_file_offset
+            file_max_time = current_max_time + current_file_offset
             self.dynamic_file_info.append({
                 'dynamic_path': str(dynamic_path),
                 'time_offset': current_file_offset,
-                'mask_path': group.get('mask')
+                'mask_path': group.get('mask'),
+                'time_range': (file_min_time, file_max_time)  # 记录时间戳范围
             })
             
             # 4. 保存mask路径（同时保存对应的时间偏移量信息）
@@ -281,6 +285,52 @@ class LaneTrafficDataset(Dataset):
                     added = len(union_times) - len(self.timestamps)
                     print(f"✅ 已将掩码文件中的 {added} 个时间戳并入时间轴，保证与mask对齐")
                 self.timestamps = union_times
+        
+        # 记录每个文件对应的时间索引范围（用于避免窗口跨越文件边界）
+        self.file_boundaries = []  # 每个元素是 (start_idx, end_idx) 表示文件在时间索引中的范围
+        time_to_idx = {t: idx for idx, t in enumerate(self.timestamps)}
+        
+        for i, dyn_info in enumerate(self.dynamic_file_info):
+            dynamic_path = Path(dyn_info['dynamic_path'])
+            
+            # 获取该文件的时间戳范围（已应用偏移量）
+            if 'time_range' in dyn_info:
+                file_min_time, file_max_time = dyn_info['time_range']
+            else:
+                # 向后兼容：如果没有 time_range，尝试从 dynamic_df 中推断
+                # 这需要重新读取文件，效率较低，但可以工作
+                try:
+                    df_original = pd.read_csv(dynamic_path)
+                    time_offset = dyn_info['time_offset']
+                    original_times = df_original[self.time_col].values
+                    adjusted_times = original_times + time_offset
+                    file_min_time = np.min(adjusted_times)
+                    file_max_time = np.max(adjusted_times)
+                except:
+                    # 如果无法读取，跳过这个文件
+                    self.file_boundaries.append((0, 0))
+                    continue
+            
+            # 找到该文件时间戳范围内的所有时间索引
+            # 注意：由于 mask 文件可能添加了额外时间戳，我们需要检查所有在范围内的索引
+            valid_indices = []
+            for t_idx, timestamp in enumerate(self.timestamps):
+                # 检查时间戳是否在该文件的范围内（允许小的浮点误差）
+                if file_min_time - 1e-6 <= timestamp <= file_max_time + 1e-6:
+                    valid_indices.append(t_idx)
+            
+            if valid_indices:
+                start_idx = min(valid_indices)
+                end_idx = max(valid_indices) + 1  # end_idx 是开区间
+                self.file_boundaries.append((start_idx, end_idx))
+                print(f"   文件 {i+1} ({dynamic_path.name}) 时间索引范围: [{start_idx}, {end_idx})")
+            else:
+                # 如果没有找到有效索引，使用空范围
+                self.file_boundaries.append((0, 0))
+                print(f"   ⚠️ 警告: 文件 {i+1} ({dynamic_path.name}) 未找到有效时间索引")
+        
+        if len(self.file_boundaries) > 1:
+            print(f"✅ 已记录 {len(self.file_boundaries)} 个文件的边界信息，用于防止窗口跨越文件边界")
         
         # 从静态数据创建唯一的lane_id索引
         self.lane_ids = np.array([node[self.lane_id_col] for node in self.static_nodes])

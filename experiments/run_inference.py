@@ -28,6 +28,7 @@ from spin.baselines import SAITS, TransformerModel, BRITS, LSTMModel
 from spin.imputers import SPINImputer, SAITSImputer, BRITSImputer, LSTMImputer
 from spin.models import SPINModel, SPINHierarchicalModel
 from spin.datasets.lane_traffic_dataset import LaneTrafficDataset
+from spin.datasets.bounded_imputation_dataset import filter_cross_boundary_windows
 
 
 def get_model_classes(model_str):
@@ -793,6 +794,15 @@ def run_experiment(args):
                                       input_map=input_map,
                                       window=exp_config.get('window', 10),
                                       stride=exp_config.get('stride', 1))
+    
+    # 如果数据集有文件边界信息，过滤跨越边界的窗口
+    if hasattr(dataset, 'file_boundaries') and dataset.file_boundaries:
+        print(f"\n🔍 检测到 {len(dataset.file_boundaries)} 个文件边界，开始过滤跨越边界的窗口...")
+        torch_dataset = filter_cross_boundary_windows(
+            torch_dataset, 
+            dataset.file_boundaries, 
+            exp_config.get('window', 10)
+        )
 
     # get train/val/test indices
     splitter = dataset.get_splitter(args.val_len, args.test_len)
