@@ -19,6 +19,16 @@ data_groups:
     dynamic: ./data/d210240930_lane_node_stats.csv
     mask: ./data/d210240930_lane_mask.csv
 
+# 训练时随机选择的mask文件列表（可选）
+# 如果指定，训练时每个epoch会随机选择一个mask文件，避免固定缺失模式形成硬编码式捷径
+# 如果不指定，则自动从data_groups中提取所有mask文件
+# 注意：mask_files中的每个mask文件应该与data_groups中的某个dynamic文件匹配
+#       系统会自动匹配mask文件和dynamic文件，并应用正确的时间偏移量
+# mask_files:
+#   - ./data/d210240830_lane_mask.csv  # 对应 d210240830_lane_node_stats.csv
+#   - ./data/d210240900_lane_mask.csv  # 对应 d210240900_lane_node_stats.csv
+#   - ./data/d210240930_lane_mask.csv  # 对应 d210240930_lane_node_stats.csv
+
 #### Training params ##########################################################
 whiten_prob: [0.0, 0.0, 0.0]
 scale_target: True

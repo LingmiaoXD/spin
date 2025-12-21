@@ -30,6 +30,7 @@ from spin.imputers import SPINImputer, SAITSImputer, BRITSImputer, LSTMImputer
 from spin.models import SPINModel, SPINHierarchicalModel
 from spin.scheduler import CosineSchedulerWithRestarts
 from spin.datasets.lane_traffic_dataset import LaneTrafficDataset
+from spin.datasets.mask_switching_callback import MaskSwitchingCallback
 
 
 def get_model_classes(model_str):
@@ -54,7 +55,8 @@ def get_model_classes(model_str):
 
 def get_dataset(dataset_name: str, data_path: str = None, 
                 static_data_path: str = None, mask_data_path: str = None,
-                feature_cols: list = None, data_groups: list = None):
+                feature_cols: list = None, data_groups: list = None,
+                mask_files: list = None):
     """
     获取数据集
     
@@ -65,6 +67,7 @@ def get_dataset(dataset_name: str, data_path: str = None,
         mask_data_path: 掩码文件路径 (用于lane数据集，单组模式)
         feature_cols: 特征列名列表 (用于lane数据集)
         data_groups: 多组数据配置列表 (用于lane数据集，多组模式)
+        mask_files: 训练时随机选择的mask文件列表 (用于lane数据集)
     """
     # 支持车道级交通数据集
     if dataset_name == 'lane':
@@ -72,6 +75,7 @@ def get_dataset(dataset_name: str, data_path: str = None,
             # 多组数据模式
             return LaneTrafficDataset(
                 data_groups=data_groups,
+                mask_files=mask_files,
                 feature_cols=feature_cols,
                 impute_nans=True
             )
@@ -81,6 +85,7 @@ def get_dataset(dataset_name: str, data_path: str = None,
                 static_data_path=static_data_path,
                 dynamic_data_path=data_path,
                 mask_data_path=mask_data_path,
+                mask_files=mask_files,
                 feature_cols=feature_cols,
                 impute_nans=True
             )
@@ -273,6 +278,8 @@ def run_experiment(args):
     
     # 获取 data_groups 配置（如果有）
     data_groups = getattr(args, 'data_groups', None)
+    # 获取 mask_files 配置（如果有）
+    mask_files = getattr(args, 'mask_files', None)
     
     dataset = get_dataset(
         args.dataset_name, 
@@ -280,7 +287,8 @@ def run_experiment(args):
         static_data_path=args.static_data_path,
         mask_data_path=args.mask_data_path,
         feature_cols=feature_cols,
-        data_groups=data_groups
+        data_groups=data_groups,
+        mask_files=mask_files
     )
 
     logger.info(args)
@@ -410,6 +418,15 @@ def run_experiment(args):
 
     tb_logger = TensorBoardLogger(logdir, name="model")
     
+    # 如果指定了mask_files，添加mask切换回调
+    callbacks = [early_stop_callback, checkpoint_callback]
+    if mask_files and len(mask_files) > 0:
+        mask_switching_callback = MaskSwitchingCallback(dataset, torch_dataset)
+        callbacks.append(mask_switching_callback)
+        print(f"✅ 已启用mask动态切换功能，共 {len(mask_files)} 个mask文件")
+    else:
+        print("ℹ️  未指定mask_files，使用固定的mask模式")
+    
     # 确定checkpoint路径
     if args.checkpoint_path is not None:
         # 使用用户指定的checkpoint
@@ -436,7 +453,7 @@ def run_experiment(args):
                              limit_train_batches=args.batches_epoch * args.split_batch_in,
                              check_val_every_n_epoch=1,
                              log_every_n_steps=1,
-                             callbacks=[early_stop_callback, checkpoint_callback])
+                             callbacks=callbacks)
         check_shared_storage(imputer)
         print("Checking shared storage...done!!!!!!!")
         trainer.fit(imputer,

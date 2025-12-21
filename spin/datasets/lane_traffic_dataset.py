@@ -42,6 +42,7 @@ class LaneTrafficDataset(Dataset):
                  dynamic_data_path: Optional[str] = None,
                  mask_data_path: Optional[str] = None,
                  data_groups: Optional[List[Dict[str, str]]] = None,
+                 mask_files: Optional[List[str]] = None,
                  feature_cols: Optional[List[str]] = None,
                  time_col: str = 'start_frame',
                  lane_id_col: str = 'lane_id',
@@ -61,9 +62,9 @@ class LaneTrafficDataset(Dataset):
                  dtsf_initial_z: float = 1.0, # 双时间尺度拥堵隐状态的初始拥堵状态参数
                  dtsf_v_base_init: float = 45.0, # 双时间尺度拥堵隐状态的v_base_init参数，基础速度的初始值
                  dtsf_no_car_value: Optional[float] = None,
-                 dtsf_auto_no_car: bool = True, # 是否自动识别“无车”标记值
-                 dtsf_treat_no_car_as_missing: bool = True, # 是否将“无车”标记值视为缺失值
-                 dtsf_no_car_eps: float = 1e-3, # “无车”标记值的epsilon参数
+                 dtsf_auto_no_car: bool = True, # 是否自动识别"无车"标记值
+                 dtsf_treat_no_car_as_missing: bool = True, # 是否将"无车"标记值视为缺失值
+                 dtsf_no_car_eps: float = 1e-3, # "无车"标记值的epsilon参数
                  dtsf_device: str = 'cuda', # 双时间尺度拥堵隐状态的设备参数
                  **kwargs):
         """
@@ -75,6 +76,7 @@ class LaneTrafficDataset(Dataset):
             mask_data_path: 用户自定义掩码文件路径(csv)，可选
             data_groups: 多组数据配置列表，每组格式为:
                          [{"static": "path1.json", "dynamic": "path1.csv", "mask": "mask1.csv"}, ...]
+            mask_files: 训练时随机选择的mask文件列表，如果指定，训练时每个epoch会随机选择一个mask文件
             feature_cols: 要使用的特征列名列表，默认使用所有数值特征
             time_col: 动态数据中的时间列名
             lane_id_col: 车道ID列名
@@ -129,15 +131,25 @@ class LaneTrafficDataset(Dataset):
         # 保存归一化参数（用于推理时反归一化）
         self.speed_normalization_params = None  # {'speed_min': float, 'speed_max': float, 'is_normalized': bool}
         
+        # 保存用于训练时随机选择的mask文件列表
+        # 如果未指定，将在_load_data后从data_groups中自动提取
+        self.mask_files_config = mask_files  # 保存用户配置
+        self.mask_files = []  # 实际使用的mask文件列表（包含匹配信息）
+        self.current_mask_file = None  # 当前使用的mask文件路径
+        
         # 加载和预处理数据
         self._load_data()
         self._preprocess_data()
+        
+        # 初始化mask_files列表（如果未指定，从data_groups中提取）
+        self._initialize_mask_files()
         
     def _load_data(self):
         """加载静态道路数据和动态交通数据（支持多组）"""
         self.static_nodes = []
         self.dynamic_df = pd.DataFrame()
         self.mask_data_paths = []  # 保存所有mask路径供后续使用
+        self.dynamic_file_info = []  # 保存每个dynamic文件的信息（用于匹配mask文件）
         
         # 用于记录时间戳偏移量，避免不同文件的时间戳冲突
         time_offset = 0.0
@@ -207,7 +219,14 @@ class LaneTrafficDataset(Dataset):
             else:
                 raise ValueError(f"动态数据文件应为CSV格式: {dynamic_path.suffix}")
             
-            # 3. 保存mask路径（同时保存对应的时间偏移量信息）
+            # 3. 保存dynamic文件信息（用于匹配mask文件）
+            self.dynamic_file_info.append({
+                'dynamic_path': str(dynamic_path),
+                'time_offset': current_file_offset,
+                'mask_path': group.get('mask')
+            })
+            
+            # 4. 保存mask路径（同时保存对应的时间偏移量信息）
             mask_path = group.get('mask')
             self.mask_data_paths.append({
                 'path': mask_path,
@@ -571,6 +590,184 @@ class LaneTrafficDataset(Dataset):
         
         # 评估掩码是训练掩码的反
         self.eval_mask = ~self.training_mask
+    
+    def _initialize_mask_files(self):
+        """
+        初始化mask_files列表
+        如果用户未指定mask_files，则从data_groups中自动提取所有mask文件
+        如果用户指定了mask_files，则验证它们是否与data_groups中的dynamic文件匹配
+        """
+        if self.mask_files_config is not None and len(self.mask_files_config) > 0:
+            # 用户指定了mask_files，需要验证它们是否与dynamic文件匹配
+            print(f"\n🔍 验证 {len(self.mask_files_config)} 个指定的mask文件...")
+            for mask_file in self.mask_files_config:
+                mask_path = Path(mask_file)
+                if not mask_path.exists():
+                    print(f"⚠️  警告: mask文件不存在，跳过: {mask_path}")
+                    continue
+                
+                # 尝试匹配对应的dynamic文件
+                matched = False
+                mask_name = mask_path.stem.lower()
+                
+                # 提取mask文件名中的关键标识符（例如 d210240900）
+                # 尝试提取日期/时间标识符（以d开头，后跟数字的模式）
+                import re
+                mask_identifiers = re.findall(r'd\d+', mask_name)
+                
+                for dyn_info in self.dynamic_file_info:
+                    dyn_path = Path(dyn_info['dynamic_path'])
+                    dyn_name = dyn_path.stem.lower()
+                    
+                    # 方法1: 如果mask文件名包含日期标识符，检查dynamic文件名是否也包含相同的标识符
+                    if mask_identifiers:
+                        for identifier in mask_identifiers:
+                            if identifier in dyn_name:
+                                self.mask_files.append({
+                                    'path': str(mask_path),
+                                    'time_offset': dyn_info['time_offset'],
+                                    'dynamic_path': dyn_info['dynamic_path']
+                                })
+                                matched = True
+                                print(f"   ✅ {mask_path.name} -> {dyn_path.name} (时间偏移: {dyn_info['time_offset']:.2f})")
+                                break
+                        if matched:
+                            break
+                    
+                    # 方法2: 通过去除常见后缀后比较文件名
+                    mask_base = mask_name.replace('_mask', '').replace('_merged', '').replace('_lane', '')
+                    dyn_base = dyn_name.replace('_lane_node_stats', '').replace('_node_stats', '').replace('_stats', '')
+                    
+                    # 如果去除后缀后的基础名称匹配，则认为匹配
+                    if mask_base == dyn_base or (mask_base in dyn_base and len(mask_base) > 5) or (dyn_base in mask_base and len(dyn_base) > 5):
+                        self.mask_files.append({
+                            'path': str(mask_path),
+                            'time_offset': dyn_info['time_offset'],
+                            'dynamic_path': dyn_info['dynamic_path']
+                        })
+                        matched = True
+                        print(f"   ✅ {mask_path.name} -> {dyn_path.name} (时间偏移: {dyn_info['time_offset']:.2f})")
+                        break
+                
+                if not matched:
+                    # 如果没有找到匹配的dynamic文件，使用第一个dynamic文件的时间偏移量（默认）
+                    if len(self.dynamic_file_info) > 0:
+                        default_offset = self.dynamic_file_info[0]['time_offset']
+                        self.mask_files.append({
+                            'path': str(mask_path),
+                            'time_offset': default_offset,
+                            'dynamic_path': self.dynamic_file_info[0]['dynamic_path']
+                        })
+                        print(f"   ⚠️  {mask_path.name} 未找到匹配的dynamic文件，使用默认时间偏移: {default_offset:.2f}")
+                    else:
+                        print(f"   ❌ {mask_path.name} 无法匹配，跳过")
+        else:
+            # 用户未指定mask_files，从data_groups中自动提取
+            print(f"\n📋 从data_groups中自动提取mask文件...")
+            for dyn_info in self.dynamic_file_info:
+                mask_path = dyn_info.get('mask_path')
+                if mask_path is not None:
+                    mask_path_obj = Path(mask_path)
+                    if mask_path_obj.exists():
+                        self.mask_files.append({
+                            'path': str(mask_path_obj),
+                            'time_offset': dyn_info['time_offset'],
+                            'dynamic_path': dyn_info['dynamic_path']
+                        })
+                        print(f"   ✅ {mask_path_obj.name} -> {Path(dyn_info['dynamic_path']).name} (时间偏移: {dyn_info['time_offset']:.2f})")
+                    else:
+                        print(f"   ⚠️  mask文件不存在，跳过: {mask_path_obj}")
+        
+        if len(self.mask_files) == 0:
+            print(f"⚠️  警告: 没有可用的mask文件用于动态切换")
+        else:
+            print(f"✅ 共找到 {len(self.mask_files)} 个mask文件可用于动态切换")
+    
+    def switch_mask_randomly(self, seed: Optional[int] = None) -> bool:
+        """
+        从mask_files列表中随机选择一个mask文件并加载，用于训练时动态切换mask
+        自动应用对应dynamic文件的时间偏移量
+        
+        Args:
+            seed: 随机种子，如果为None则使用当前时间
+            
+        Returns:
+            bool: 是否成功切换mask
+        """
+        if not self.mask_files:
+            return False
+        
+        # 使用随机种子选择mask文件
+        if seed is not None:
+            rng = np.random.default_rng(seed)
+        else:
+            rng = np.random.default_rng()
+        
+        # 随机选择一个mask文件（包含匹配信息）
+        selected_mask_info = rng.choice(self.mask_files)
+        selected_mask_file = selected_mask_info['path']
+        time_offset = selected_mask_info['time_offset']
+        dynamic_path = selected_mask_info['dynamic_path']
+        
+        self.current_mask_file = selected_mask_file
+        
+        print(f"🔄 切换到mask文件: {Path(selected_mask_file).name}")
+        print(f"   对应dynamic文件: {Path(dynamic_path).name}")
+        print(f"   时间偏移量: {time_offset:.2f}")
+        
+        # 加载选中的mask文件
+        n_times, n_lanes, n_features = self.data.shape
+        
+        # 初始化掩码矩阵（默认所有位置都是未观测的）
+        new_training_mask = np.zeros((n_times, n_lanes, n_features), dtype=bool)
+        
+        # 创建索引映射
+        lane_id_to_idx = {lid: idx for idx, lid in enumerate(self.lane_ids)}
+        time_to_idx = {t: idx for idx, t in enumerate(self.timestamps)}
+        
+        # 加载mask文件
+        mask_path = Path(selected_mask_file)
+        if not mask_path.exists():
+            print(f"⚠️ 警告: 掩码文件不存在，跳过: {mask_path}")
+            return False
+        
+        try:
+            mask_df = pd.read_csv(mask_path)
+            
+            # 检查必需列
+            required_cols = [self.mask_time_col, self.mask_lane_col, self.mask_value_col]
+            missing_cols = [col for col in required_cols if col not in mask_df.columns]
+            if missing_cols:
+                print(f"⚠️ 警告: 掩码文件 {mask_path} 缺少必需列: {missing_cols}")
+                return False
+            
+            # 应用时间偏移量到mask文件的时间戳（确保与对应的dynamic文件对齐）
+            mask_df = mask_df.copy()
+            mask_df[self.mask_time_col] = mask_df[self.mask_time_col] + time_offset
+            
+            # 填充掩码
+            for _, row in mask_df.iterrows():
+                time_val = row[self.mask_time_col]
+                lane_id = row[self.mask_lane_col]
+                is_observed = bool(row[self.mask_value_col])
+                
+                time_idx = time_to_idx.get(time_val)
+                lane_idx = lane_id_to_idx.get(lane_id)
+                
+                if time_idx is not None and lane_idx is not None:
+                    # 对所有特征都使用相同的掩码
+                    new_training_mask[time_idx, lane_idx, :] = is_observed
+            
+            # 更新mask
+            self.training_mask = new_training_mask
+            self.eval_mask = ~self.training_mask
+            
+            print(f"✅ 已更新mask，已观测数据比例: {self.training_mask.mean():.3f}")
+            return True
+            
+        except Exception as e:
+            print(f"⚠️ 警告: 加载掩码文件失败: {e}")
+            return False
         
     def get_connectivity(self, threshold: float = 0.1, 
                         include_self: bool = False,
