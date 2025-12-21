@@ -16,17 +16,23 @@ data_groups:
     dynamic: ./data/d210240830_lane_node_stats.csv
     mask: 
       - ./data/d210240830_lane_mask.csv
-      - ./examples/input/d210240830_merged_lane_mask.csv
+      - ./data/d210240830_lane_mask_2.csv
+      - ./data/d210240830_lane_mask_3.csv
+      - ./data/d210240830_lane_mask_4.csv
   - static: ./data/graph_40m.json
     dynamic: ./data/d210240900_lane_node_stats.csv
     mask:
       - ./data/d210240900_lane_mask.csv
-      - ./examples/input/d210240900_merged_lane_mask.csv
+      - ./data/d210240900_lane_mask_2.csv
+      - ./data/d210240900_lane_mask_3.csv
+      - ./data/d210240900_lane_mask_4.csv
   - static: ./data/graph_40m.json
     dynamic: ./data/d210240930_lane_node_stats.csv
     mask:
       - ./data/d210240930_lane_mask.csv
-      - ./examples/input/d210240930_merged_lane_mask.csv
+      - ./data/d210240930_lane_mask_2.csv
+      - ./data/d210240930_lane_mask_3.csv
+      - ./data/d210240930_lane_mask_4.csv
 
 #### Training params ##########################################################
 whiten_prob: [0.0, 0.0, 0.0]

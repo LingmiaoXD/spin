@@ -5,6 +5,7 @@
 
 from typing import Optional, List, Tuple
 import numpy as np
+import torch
 from tsl.data import ImputationDataset
 
 
@@ -57,7 +58,27 @@ def filter_cross_boundary_windows(torch_dataset: ImputationDataset,
         print("⚠️ 警告: 数据集没有 indices 属性，无法过滤窗口")
         return torch_dataset
     
-    original_indices = torch_dataset.indices.copy()
+    # 处理不同类型的 indices（Tensor、numpy array、list）
+    indices = torch_dataset.indices
+    is_tensor = torch.is_tensor(indices)
+    
+    if is_tensor:
+        # 如果是 Tensor，转换为 numpy 数组进行处理，但记住原始类型
+        original_indices = indices.cpu().numpy().copy()
+    elif isinstance(indices, np.ndarray):
+        # 如果是 numpy 数组，使用 copy()
+        original_indices = indices.copy()
+    elif isinstance(indices, (list, tuple)):
+        # 如果是列表或元组，转换为列表
+        original_indices = list(indices)
+    else:
+        # 其他情况，尝试转换为 numpy 数组
+        try:
+            original_indices = np.array(indices).copy()
+        except:
+            print("⚠️ 警告: 无法处理 indices 类型，将使用原始数据集")
+            return torch_dataset
+    
     valid_indices = []
     
     for idx in original_indices:
@@ -80,15 +101,32 @@ def filter_cross_boundary_windows(torch_dataset: ImputationDataset,
         if is_window_valid(window_start_idx, window_size):
             valid_indices.append(idx)
     
-    # 更新 indices
-    if isinstance(valid_indices, list):
-        torch_dataset.indices = np.array(valid_indices) if len(valid_indices) > 0 else np.array([], dtype=int)
+    # 更新 indices - 保持原始类型（Tensor 或 numpy array）
+    if len(valid_indices) > 0:
+        if is_tensor:
+            # 如果是 Tensor，转换回 Tensor
+            filtered_indices = torch.tensor(valid_indices, dtype=indices.dtype, device=indices.device)
+        else:
+            # 否则保持为 numpy 数组
+            filtered_indices = np.array(valid_indices)
     else:
-        torch_dataset.indices = valid_indices
+        if is_tensor:
+            # 如果是 Tensor，创建空的 Tensor
+            filtered_indices = torch.tensor([], dtype=indices.dtype, device=indices.device)
+        else:
+            # 否则创建空的 numpy 数组
+            filtered_indices = np.array([], dtype=int)
     
-    filtered_count = len(original_indices) - len(torch_dataset.indices)
+    # 尝试直接设置 _indices（如果存在）或使用 object.__setattr__ 绕过属性设置器
+    if hasattr(torch_dataset, '_indices'):
+        object.__setattr__(torch_dataset, '_indices', filtered_indices)
+    else:
+        # 使用 object.__setattr__ 直接设置 indices，绕过属性设置器
+        object.__setattr__(torch_dataset, 'indices', filtered_indices)
+    
+    filtered_count = len(original_indices) - len(filtered_indices)
     print(f"✅ 已过滤 {filtered_count} 个跨越文件边界的窗口")
-    print(f"   原始窗口数: {len(original_indices)}, 剩余有效窗口数: {len(torch_dataset.indices)}")
+    print(f"   原始窗口数: {len(original_indices)}, 剩余有效窗口数: {len(filtered_indices)}")
     
     return torch_dataset
 
