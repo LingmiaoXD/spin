@@ -9,20 +9,22 @@ stride: 1
 
 # 多组数据配置
 # 每个mask字段可以是单个文件路径，也可以是文件路径列表
-# 如果是列表，训练时每个epoch会从该列表中随机选择一个mask文件
-# 这样可以避免固定缺失模式形成硬编码式捷径
+# 如果是列表，训练时每个epoch会按顺序循环选择mask文件（epoch % len(mask_files)）
+# 这样可以避免固定缺失模式形成硬编码式捷径，同时确保每个mask文件被均匀使用
 data_groups:
   - static: ./data/graph_40m.json
     dynamic: ./data/d210240830_lane_node_stats.csv
-    mask: ./data/d210240830_lane_mask.csv  # 单个mask文件
+    mask: 
+      - ./data/d210240830_lane_mask.csv
+      - ./examples/input/d210240830_merged_lane_mask.csv
   - static: ./data/graph_40m.json
     dynamic: ./data/d210240900_lane_node_stats.csv
-    mask:  # 多个mask文件列表（训练时随机选择）
+    mask:
       - ./data/d210240900_lane_mask.csv
       - ./examples/input/d210240900_merged_lane_mask.csv
   - static: ./data/graph_40m.json
     dynamic: ./data/d210240930_lane_node_stats.csv
-    mask:  # 多个mask文件列表
+    mask:
       - ./data/d210240930_lane_mask.csv
       - ./examples/input/d210240930_merged_lane_mask.csv
 

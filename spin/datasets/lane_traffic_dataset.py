@@ -129,9 +129,10 @@ class LaneTrafficDataset(Dataset):
         # 保存归一化参数（用于推理时反归一化）
         self.speed_normalization_params = None  # {'speed_min': float, 'speed_max': float, 'is_normalized': bool}
         
-        # 保存用于训练时随机选择的mask文件列表（从data_groups中自动提取）
+        # 保存用于训练时循环选择的mask文件列表（从data_groups中自动提取）
         self.mask_files = []  # 实际使用的mask文件列表（包含匹配信息）
         self.current_mask_file = None  # 当前使用的mask文件路径
+        self.current_mask_index = 0  # 当前选择的mask文件索引（用于循环选择）
         
         # 加载和预处理数据
         self._load_data()
@@ -719,13 +720,13 @@ class LaneTrafficDataset(Dataset):
         else:
             print(f"✅ 共找到 {len(self.mask_files)} 个mask文件可用于动态切换")
     
-    def switch_mask_randomly(self, seed: Optional[int] = None) -> bool:
+    def switch_mask_sequentially(self, epoch: Optional[int] = None) -> bool:
         """
-        从mask_files列表中随机选择一个mask文件并加载，用于训练时动态切换mask
+        从mask_files列表中按顺序循环选择一个mask文件并加载，用于训练时动态切换mask
         自动应用对应dynamic文件的时间偏移量
         
         Args:
-            seed: 随机种子，如果为None则使用当前时间
+            epoch: 当前epoch编号，如果为None则使用内部索引自动递增
             
         Returns:
             bool: 是否成功切换mask
@@ -733,21 +734,23 @@ class LaneTrafficDataset(Dataset):
         if not self.mask_files:
             return False
         
-        # 使用随机种子选择mask文件
-        if seed is not None:
-            rng = np.random.default_rng(seed)
+        # 如果提供了epoch编号，使用它来选择mask文件（循环）
+        if epoch is not None:
+            mask_index = epoch % len(self.mask_files)
         else:
-            rng = np.random.default_rng()
+            # 否则使用内部索引，并在每次调用后递增
+            mask_index = self.current_mask_index
+            self.current_mask_index = (self.current_mask_index + 1) % len(self.mask_files)
         
-        # 随机选择一个mask文件（包含匹配信息）
-        selected_mask_info = rng.choice(self.mask_files)
+        # 按顺序选择一个mask文件（包含匹配信息）
+        selected_mask_info = self.mask_files[mask_index]
         selected_mask_file = selected_mask_info['path']
         time_offset = selected_mask_info['time_offset']
         dynamic_path = selected_mask_info['dynamic_path']
         
         self.current_mask_file = selected_mask_file
         
-        print(f"🔄 切换到mask文件: {Path(selected_mask_file).name}")
+        print(f"🔄 切换到mask文件 ({mask_index + 1}/{len(self.mask_files)}): {Path(selected_mask_file).name}")
         print(f"   对应dynamic文件: {Path(dynamic_path).name}")
         print(f"   时间偏移量: {time_offset:.2f}")
         
