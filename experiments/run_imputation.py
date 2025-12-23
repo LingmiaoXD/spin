@@ -34,6 +34,69 @@ from spin.datasets.mask_switching_callback import MaskSwitchingCallback
 from spin.datasets.bounded_imputation_dataset import filter_cross_boundary_windows
 
 
+def build_lane_dm_for_group(group, args, feature_cols, model_name):
+    """
+    为单个 dynamic 组构建 LaneTrafficDataset、ImputationDataset 和 DataModule。
+    这样可以在训练时按 dynamic 组轮流喂数据，同时共享同一个模型。
+    """
+    dataset = LaneTrafficDataset(
+        data_groups=[group],
+        feature_cols=feature_cols,
+        impute_nans=True
+    )
+
+    is_spin = model_name in ['spin', 'spin_h']
+    is_lstm = model_name == 'lstm'
+
+    if is_spin or model_name == 'transformer':
+        time_emb = dataset.datetime_encoded([]).values
+        exog_map = {'global_temporal_encoding': time_emb}
+        input_map = {'u': 'temporal_encoding', 'x': 'data'}
+    else:
+        exog_map = input_map = None
+
+    if is_spin or model_name == 'grin':
+        adj = dataset.get_connectivity(threshold=args.adj_threshold,
+                                       include_self=False,
+                                       force_symmetric=is_spin)
+        from tsl.ops.connectivity import adj_to_edge_index
+        edge_index, edge_weight = adj_to_edge_index(adj)
+        connectivity = (edge_index, edge_weight)
+    elif is_lstm:
+        connectivity = None
+    else:
+        connectivity = None
+
+    data, index, node_ids = dataset.numpy(return_idx=True)
+    torch_dataset = ImputationDataset(data=data,
+                                      index=index,
+                                      training_mask=dataset.training_mask,
+                                      eval_mask=dataset.eval_mask,
+                                      connectivity=connectivity,
+                                      exogenous=exog_map,
+                                      input_map=input_map,
+                                      window=args.window,
+                                      stride=args.stride)
+
+    if hasattr(dataset, 'file_boundaries') and dataset.file_boundaries:
+        print(f"\n🔍 检测到 {len(dataset.file_boundaries)} 个文件边界，开始过滤跨越边界的窗口...")
+        torch_dataset = filter_cross_boundary_windows(
+            torch_dataset,
+            dataset.file_boundaries,
+            args.window
+        )
+
+    splitter = dataset.get_splitter(args.val_len, args.test_len)
+    scalers = {'data': StandardScaler(axis=(0, 1))}
+    dm = SpatioTemporalDataModule(torch_dataset,
+                                  scalers=scalers,
+                                  splitter=splitter,
+                                  batch_size=args.batch_size // args.split_batch_in)
+    dm.setup()
+
+    return dataset, dm, torch_dataset
+
+
 def get_model_classes(model_str):
     if model_str == 'spin':
         model, filler = SPINModel, SPINImputer
@@ -277,14 +340,91 @@ def run_experiment(args):
     # 获取 data_groups 配置（如果有）
     data_groups = getattr(args, 'data_groups', None)
     
-    dataset = get_dataset(
-        args.dataset_name, 
-        args.data_path,
-        static_data_path=args.static_data_path,
-        mask_data_path=args.mask_data_path,
-        feature_cols=feature_cols,
-        data_groups=data_groups
-    )
+    # 如果提供了多个 dynamic 组，则为每个组分别构建 dataset / datamodule
+    if data_groups is not None:
+        group_datasets = []
+        group_dms = []
+        group_torch_datasets = []
+        for i, g in enumerate(data_groups):
+            print(f"\n====== 构建第 {i+1}/{len(data_groups)} 组数据集 ======")
+            dataset_i, dm_i, torch_ds_i = build_lane_dm_for_group(
+                g, args, feature_cols, args.model_name
+            )
+            group_datasets.append(dataset_i)
+            group_dms.append(dm_i)
+            group_torch_datasets.append(torch_ds_i)
+        
+        # 下面模型超参数用第一个组的形状作为参考
+        dataset = group_datasets[0]
+        dm = group_dms[0]
+        torch_dataset = group_torch_datasets[0]
+    else:
+        dataset = get_dataset(
+            args.dataset_name, 
+            args.data_path,
+            static_data_path=args.static_data_path,
+            mask_data_path=args.mask_data_path,
+            feature_cols=feature_cols,
+            data_groups=data_groups
+        )
+    
+        # time embedding
+        if is_spin or args.model_name == 'transformer':
+            time_emb = dataset.datetime_encoded([]).values
+            exog_map = {'global_temporal_encoding': time_emb}
+    
+            input_map = {
+                'u': 'temporal_encoding',
+                'x': 'data'
+            }
+        else:
+            exog_map = input_map = None
+    
+        if is_spin or args.model_name == 'grin':
+            adj = dataset.get_connectivity(threshold=args.adj_threshold,
+                                           include_self=False,
+                                           force_symmetric=is_spin)
+            # 将邻接矩阵转换为 edge_index 格式 (2, num_edges)
+            from tsl.ops.connectivity import adj_to_edge_index
+            edge_index, edge_weight = adj_to_edge_index(adj)
+            connectivity = (edge_index, edge_weight)
+        elif is_lstm:
+            # LSTM不需要图结构，但为了兼容性，可以设置为None
+            connectivity = None
+        else:
+            connectivity = None
+    
+        # instantiate dataset
+        data, index, node_ids = dataset.numpy(return_idx=True)
+        torch_dataset = ImputationDataset(data=data,
+                                          index=index,
+                                          training_mask=dataset.training_mask,
+                                          eval_mask=dataset.eval_mask,
+                                          connectivity=connectivity,
+                                          exogenous=exog_map,
+                                          input_map=input_map,
+                                          window=args.window,
+                                          stride=args.stride)
+        
+        # 如果数据集有文件边界信息，过滤跨越边界的窗口
+        if hasattr(dataset, 'file_boundaries') and dataset.file_boundaries:
+            print(f"\n🔍 检测到 {len(dataset.file_boundaries)} 个文件边界，开始过滤跨越边界的窗口...")
+            torch_dataset = filter_cross_boundary_windows(
+                torch_dataset, 
+                dataset.file_boundaries, 
+                args.window
+            )
+    
+        # get train/val/test indices
+        splitter = dataset.get_splitter(args.val_len, args.test_len)
+    
+        scalers = {'data': StandardScaler(axis=(0, 1))}
+    
+        dm = SpatioTemporalDataModule(torch_dataset,
+                                      scalers=scalers,
+                                      splitter=splitter,
+                                      batch_size=args.batch_size // args.split_batch_in)
+        dm.setup()
 
     logger.info(args)
 
@@ -301,68 +441,6 @@ def run_experiment(args):
     with open(os.path.join(logdir, 'config.yaml'), 'w') as fp:
         yaml.dump(parser_utils.config_dict_from_args(args), fp,
                   indent=4, sort_keys=True)
-
-    ########################################
-    # data module                          #
-    ########################################
-
-    # time embedding
-    if is_spin or args.model_name == 'transformer':
-        time_emb = dataset.datetime_encoded([]).values
-        exog_map = {'global_temporal_encoding': time_emb}
-
-        input_map = {
-            'u': 'temporal_encoding',
-            'x': 'data'
-        }
-    else:
-        exog_map = input_map = None
-
-    if is_spin or args.model_name == 'grin':
-        adj = dataset.get_connectivity(threshold=args.adj_threshold,
-                                       include_self=False,
-                                       force_symmetric=is_spin)
-        # 将邻接矩阵转换为 edge_index 格式 (2, num_edges)
-        from tsl.ops.connectivity import adj_to_edge_index
-        edge_index, edge_weight = adj_to_edge_index(adj)
-        connectivity = (edge_index, edge_weight)
-    elif is_lstm:
-        # LSTM不需要图结构，但为了兼容性，可以设置为None
-        connectivity = None
-    else:
-        connectivity = None
-
-    # instantiate dataset
-    data, index, node_ids = dataset.numpy(return_idx=True)
-    torch_dataset = ImputationDataset(data=data,
-                                      index=index,
-                                      training_mask=dataset.training_mask,
-                                      eval_mask=dataset.eval_mask,
-                                      connectivity=connectivity,
-                                      exogenous=exog_map,
-                                      input_map=input_map,
-                                      window=args.window,
-                                      stride=args.stride)
-    
-    # 如果数据集有文件边界信息，过滤跨越边界的窗口
-    if hasattr(dataset, 'file_boundaries') and dataset.file_boundaries:
-        print(f"\n🔍 检测到 {len(dataset.file_boundaries)} 个文件边界，开始过滤跨越边界的窗口...")
-        torch_dataset = filter_cross_boundary_windows(
-            torch_dataset, 
-            dataset.file_boundaries, 
-            args.window
-        )
-
-    # get train/val/test indices
-    splitter = dataset.get_splitter(args.val_len, args.test_len)
-
-    scalers = {'data': StandardScaler(axis=(0, 1))}
-
-    dm = SpatioTemporalDataModule(torch_dataset,
-                                  scalers=scalers,
-                                  splitter=splitter,
-                                  batch_size=args.batch_size // args.split_batch_in)
-    dm.setup()
 
     ########################################
     # predictor                            #
@@ -422,14 +500,17 @@ def run_experiment(args):
 
     tb_logger = TensorBoardLogger(logdir, name="model")
     
-    # 如果数据集有多个mask文件，添加mask切换回调
+    # 如果只有单组数据，且存在多个mask文件，则添加 mask 切换回调
     callbacks = [early_stop_callback, checkpoint_callback]
-    if hasattr(dataset, 'mask_files') and len(dataset.mask_files) > 0:
-        mask_switching_callback = MaskSwitchingCallback(dataset, torch_dataset)
-        callbacks.append(mask_switching_callback)
-        print(f"✅ 已启用mask动态切换功能，共 {len(dataset.mask_files)} 个mask文件")
+    if data_groups is None:
+        if hasattr(dataset, 'mask_files') and len(dataset.mask_files) > 0:
+            mask_switching_callback = MaskSwitchingCallback(dataset, torch_dataset)
+            callbacks.append(mask_switching_callback)
+            print(f"✅ 已启用mask动态切换功能，共 {len(dataset.mask_files)} 个mask文件")
+        else:
+            print("ℹ️  未找到多个mask文件，使用固定的mask模式")
     else:
-        print("ℹ️  未找到多个mask文件，使用固定的mask模式")
+        print("ℹ️  多个 dynamic 轮训训练，关闭跨 dynamic 的 mask 切换回调（每组内部可包含自己的 mask）")
     
     # 确定checkpoint路径
     if args.checkpoint_path is not None:
@@ -446,7 +527,7 @@ def run_experiment(args):
         print("开始训练...")
         print("Checking shared storage...here!!!!!!!")
         
-        trainer = pl.Trainer(max_epochs=args.epochs,
+        trainer = pl.Trainer(max_epochs=1,
                              default_root_dir=logdir,
                              logger=tb_logger,
                              precision=args.precision,
@@ -460,10 +541,32 @@ def run_experiment(args):
                              callbacks=callbacks)
         check_shared_storage(imputer)
         print("Checking shared storage...done!!!!!!!")
-        trainer.fit(imputer,
-                    train_dataloaders=dm.train_dataloader(),
-                    val_dataloaders=dm.val_dataloader(
-                        batch_size=args.batch_inference))
+
+        total_epochs = args.epochs
+        num_groups = len(group_dms) if data_groups is not None else 1
+        group_epochs = [0] * num_groups if data_groups is not None else None
+
+        for global_epoch in range(total_epochs):
+            if data_groups is not None:
+                gid = global_epoch % num_groups
+                cur_dm = group_dms[gid]
+                # 在每个组内部也顺序切换各自的 mask
+                if hasattr(group_datasets[gid], 'mask_files') and group_datasets[gid].mask_files:
+                    local_epoch = group_epochs[gid]
+                    success = group_datasets[gid].switch_mask_sequentially(epoch=local_epoch)
+                    if success and hasattr(group_torch_datasets[gid], 'set_mask'):
+                        group_torch_datasets[gid].set_mask(group_datasets[gid].training_mask)
+                        if hasattr(group_torch_datasets[gid], 'update_exogenous'):
+                            group_torch_datasets[gid].update_exogenous('eval_mask', group_datasets[gid].eval_mask)
+                    group_epochs[gid] += 1
+                print(f"\n🔁 Global Epoch {global_epoch + 1}/{total_epochs}: 使用第 {gid + 1}/{num_groups} 个 dynamic 训练")
+            else:
+                cur_dm = dm
+
+            trainer.fit(imputer,
+                        train_dataloaders=cur_dm.train_dataloader(),
+                        val_dataloaders=cur_dm.val_dataloader(
+                            batch_size=args.batch_inference))
         
         # 训练完成后使用最佳模型
         best_model_path = checkpoint_callback.best_model_path
@@ -477,6 +580,7 @@ def run_experiment(args):
 
     # 创建测试用的trainer
     test_trainer = pl.Trainer(accelerator='gpu', devices=1, precision=args.precision)
+    test_dm = dm if data_groups is None else group_dms[0]
     
     # 从checkpoint加载模型权重
     if best_model_path is not None:
@@ -498,11 +602,11 @@ def run_experiment(args):
         print("使用当前训练好的模型进行测试")
     
     # 测试
-    test_trainer.test(imputer, dataloaders=dm.test_dataloader(
+    test_trainer.test(imputer, dataloaders=test_dm.test_dataloader(
         batch_size=args.batch_inference))
 
     # 预测
-    output_list = test_trainer.predict(imputer, dataloaders=dm.test_dataloader(
+    output_list = test_trainer.predict(imputer, dataloaders=test_dm.test_dataloader(
         batch_size=args.batch_inference))
     
     # 将字典列表合并为单个字典，每个键包含所有批次的拼接结果
