@@ -300,3 +300,13 @@ class AttentionWrapper:
         return output, self.attention_weights
 
 
+
+
+
+
+
+
+
+
+
+

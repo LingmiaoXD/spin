@@ -489,23 +489,12 @@ def run_experiment(args):
     # training                             #
     ########################################
 
-    # callbacks
-    early_stop_callback = EarlyStopping(monitor='val_mae',
-                                        patience=args.patience, 
-                                        mode='min',
-                                        min_delta=getattr(args, 'min_delta', 0.0),
-                                        check_on_train_epoch_end=False)
-    checkpoint_callback = ModelCheckpoint(dirpath=logdir, save_top_k=1,
-                                          monitor='val_mae', mode='min')
-
+    # callbacks（mask 切换回调可以复用，checkpoint/early stop 需按 epoch 重建）
     tb_logger = TensorBoardLogger(logdir, name="model")
-    
-    # 如果只有单组数据，且存在多个mask文件，则添加 mask 切换回调
-    callbacks = [early_stop_callback, checkpoint_callback]
+    mask_switching_callback = None
     if data_groups is None:
         if hasattr(dataset, 'mask_files') and len(dataset.mask_files) > 0:
             mask_switching_callback = MaskSwitchingCallback(dataset, torch_dataset)
-            callbacks.append(mask_switching_callback)
             print(f"✅ 已启用mask动态切换功能，共 {len(dataset.mask_files)} 个mask文件")
         else:
             print("ℹ️  未找到多个mask文件，使用固定的mask模式")
@@ -527,24 +516,10 @@ def run_experiment(args):
         print("开始训练...")
         print("Checking shared storage...here!!!!!!!")
         
-        trainer = pl.Trainer(max_epochs=1,
-                             default_root_dir=logdir,
-                             logger=tb_logger,
-                             precision=args.precision,
-                             accumulate_grad_batches=args.split_batch_in,
-                             accelerator='gpu', 
-                             devices=1,
-                             gradient_clip_val=args.grad_clip_val,
-                             limit_train_batches=args.batches_epoch * args.split_batch_in,
-                             check_val_every_n_epoch=1,
-                             log_every_n_steps=1,
-                             callbacks=callbacks)
-        check_shared_storage(imputer)
-        print("Checking shared storage...done!!!!!!!")
-
         total_epochs = args.epochs
         num_groups = len(group_dms) if data_groups is not None else 1
         group_epochs = [0] * num_groups if data_groups is not None else None
+        best_model_score = None
 
         for global_epoch in range(total_epochs):
             if data_groups is not None:
@@ -562,14 +537,56 @@ def run_experiment(args):
                 print(f"\n🔁 Global Epoch {global_epoch + 1}/{total_epochs}: 使用第 {gid + 1}/{num_groups} 个 dynamic 训练")
             else:
                 cur_dm = dm
+            
+            # 每个 global epoch 都重新创建 Trainer，以避免 max_epochs=1 训练完成后后续 fit 被跳过
+            checkpoint_callback = ModelCheckpoint(
+                dirpath=logdir,
+                save_top_k=1,
+                monitor='val_mae',
+                mode='min',
+                filename=f'epoch{global_epoch:04d}'
+            )
+            callbacks = [checkpoint_callback]
+            if mask_switching_callback is not None:
+                callbacks.append(mask_switching_callback)
 
+            trainer = pl.Trainer(max_epochs=1,
+                                 default_root_dir=logdir,
+                                 logger=tb_logger,
+                                 precision=args.precision,
+                                 accumulate_grad_batches=args.split_batch_in,
+                                 accelerator='gpu', 
+                                 devices=1,
+                                 gradient_clip_val=args.grad_clip_val,
+                                 limit_train_batches=args.batches_epoch * args.split_batch_in,
+                                 check_val_every_n_epoch=1,
+                                 log_every_n_steps=1,
+                                 callbacks=callbacks)
+            check_shared_storage(imputer)
+            print("Checking shared storage...done!!!!!!!")
+            
             trainer.fit(imputer,
                         train_dataloaders=cur_dm.train_dataloader(),
                         val_dataloaders=cur_dm.val_dataloader(
                             batch_size=args.batch_inference))
-        
-        # 训练完成后使用最佳模型
-        best_model_path = checkpoint_callback.best_model_path
+            
+            # 记录全局最佳模型
+            if checkpoint_callback.best_model_path:
+                current_score = checkpoint_callback.best_model_score
+                # best_model_score 是一个张量或标量，这里统一转为 float 比较
+                current_score_value = float(current_score) if current_score is not None else None
+                if (best_model_score is None or
+                        (current_score_value is not None and current_score_value < best_model_score)):
+                    best_model_score = current_score_value
+                    best_model_path = checkpoint_callback.best_model_path
+                else:
+                    # 清理非最优的 checkpoint，避免占用过多空间
+                    try:
+                        os.remove(checkpoint_callback.best_model_path)
+                    except OSError:
+                        pass
+
+        # 训练完成后使用全局最佳模型
         print(f"训练完成，最佳模型: {best_model_path}")
     else:
         print("跳过训练，直接使用checkpoint进行测试...")
